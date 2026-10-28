@@ -2,8 +2,6 @@ EMACS ?= emacs
 SOURCES=diff-hl.el
 SOURCES+=diff-hl-dired.el
 SOURCES+=diff-hl-flydiff.el
-SOURCES+=diff-hl-show-hunk-inline.el
-SOURCES+=diff-hl-show-hunk.el
 
 ARTIFACTS=$(patsubst %.el, %.elc, $(SOURCES))
 

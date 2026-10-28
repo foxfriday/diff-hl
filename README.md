@@ -20,7 +20,8 @@ The package also contains auxiliary modes:
 * `diff-hl-set-reference-rev` sets the reference revision for the
   current project to any revision, see its docstring for details.
 * `diff-hl-flydiff-mode` implements highlighting changes on the fly.
-* `diff-hl-show-hunk` shows the hunk at point inline.
+* `diff-hl-ediff-current-hunk` (`C-x v e`) opens Ediff against the
+  comparison base, at the hunk at point.
 
 Usage
 =====

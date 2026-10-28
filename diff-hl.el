@@ -35,7 +35,7 @@
 ;; `diff-hl-revert-hunk'     C-x v n
 ;; `diff-hl-previous-hunk'   C-x v [
 ;; `diff-hl-next-hunk'       C-x v ]
-;; `diff-hl-show-hunk'       C-x v *
+;; `diff-hl-ediff-current-hunk' C-x v e
 ;; `diff-hl-stage-current-hunk' C-x v S
 ;; `diff-hl-set-reference-rev'
 ;; `diff-hl-reset-reference-rev'
@@ -997,11 +997,9 @@ its end position."
            when (overlay-get o 'diff-hl-hunk)
            return o))
 
-(defun diff-hl-search-next-hunk (&optional backward point)
+(defun diff-hl-search-next-hunk (&optional backward)
   "Search the next hunk in the current buffer, or previous if BACKWARD."
   (save-excursion
-    (when point
-      (goto-char point))
     (catch 'found
       (while (not (if backward (bobp) (eobp)))
         (goto-char (if backward
@@ -1209,9 +1207,7 @@ Pops up a diff buffer that can be edited to choose the changes to stage."
     (define-key map "n" 'diff-hl-revert-hunk)
     (define-key map "[" 'diff-hl-previous-hunk)
     (define-key map "]" 'diff-hl-next-hunk)
-    (define-key map "*" 'diff-hl-show-hunk)
-    (define-key map "{" 'diff-hl-show-hunk-previous)
-    (define-key map "}" 'diff-hl-show-hunk-next)
+    (define-key map "e" 'diff-hl-ediff-current-hunk)
     (define-key map "S" 'diff-hl-stage-dwim)
     map))
 (fset 'diff-hl-command-map diff-hl-command-map)
@@ -1268,9 +1264,7 @@ The value of this variable is a mode line template as in
             (when diff-hl-mode
               (diff-hl-update))))))))
 
-(defvar diff-hl-repeat-exceptions '(diff-hl-show-hunk
-                                    diff-hl-show-hunk-previous
-                                    diff-hl-show-hunk-next))
+(defvar diff-hl-repeat-exceptions '(diff-hl-ediff-current-hunk))
 
 ;; Integrate with `repeat-mode' (https://debbugs.gnu.org/47566).
 (map-keymap
