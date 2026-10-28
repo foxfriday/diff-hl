@@ -36,7 +36,7 @@
 ;; `diff-hl-previous-hunk'   C-x v [
 ;; `diff-hl-next-hunk'       C-x v ]
 ;; `diff-hl-ediff-current-hunk' C-x v e
-;; `diff-hl-stage-current-hunk' C-x v S
+;; `diff-hl-stage-dwim'      C-x v S (the region, or the hunk at point)
 ;; `diff-hl-set-reference-rev'
 ;; `diff-hl-reset-reference-rev'
 ;; `diff-hl-unstage-file'
@@ -56,18 +56,18 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'diff-mode)
 (require 'vc)
 (require 'vc-dir)
 (require 'log-view)
 
 (eval-when-compile
-  (require 'cl-lib)
   (require 'vc-git)
   (require 'project))
 
 (defgroup diff-hl nil
-  "VC diff highlighting on the side of a window"
+  "VC diff highlighting in the margin of a window."
   :group 'vc)
 
 (defface diff-hl-insert
@@ -174,12 +174,12 @@ This affects the behavior of `global-diff-hl-mode'.
 If nil, no modes have `diff-hl-mode' automatically turned on.
 If t, all modes have `diff-hl-mode' enabled.
 If a list, it should be a list of `major-mode' symbol names for
-which it should be automatically turned on. The sense of the list
-is negated if it begins with `not'. As such, the default value
- (not image-mode)
-means that `diff-hl-mode' is turned on in all modes except for
-`image-mode' buffers. Previously, `diff-hl-mode' caused worse
-performance when viewing such files in certain conditions."
+which it should be automatically turned on.  The sense of the list
+is negated if it begins with `not'.  As such, the default value, which
+lists `not' and `image-mode', means that `diff-hl-mode' is turned on in
+all modes except for `image-mode' buffers.  Previously, `diff-hl-mode'
+caused worse performance when viewing such files in certain
+conditions."
   :type '(choice (const :tag "none" nil)
                  (const :tag "all" t)
                  (set :menu-tag "mode specific" :tag "modes"
@@ -196,9 +196,10 @@ the staged changes become part of the \"reference\" indicators."
   :type 'boolean)
 
 (defcustom diff-hl-goto-hunk-old-revisions nil
-  "When non-nil, `diff-hl-diff-goto-hunk' will always try to
-navigate to the line in the diff that corresponds to the current
-line in the file buffer (or as close as it can get to it).
+  "Non-nil means `diff-hl-diff-goto-hunk' always goes to the current line.
+It then always tries to navigate to the line in the diff that
+corresponds to the current line in the file buffer (or as close as it
+can get to it).
 
 When this variable is nil (default), `diff-hl-diff-goto-hunk'
 only does that when called without the prefix argument, or when
@@ -247,12 +248,26 @@ REV is the current reference revision.")
 
 It can be a relative expression as well, such as \"HEAD^\".")
 
+(defun diff-hl--safe-revision-p (value)
+  "Return non-nil if VALUE is nil or a revision safe to pass to Git.
+A string starting with \"-\" would be parsed as an option."
+  (or (null value)
+      (and (stringp value)
+           (not (string-empty-p value))
+           (not (string-prefix-p "-" value)))))
+
 (put 'diff-hl-reference-revision 'safe-local-variable
-     (lambda (value)
-       (or (null value) (stringp value))))
+     #'diff-hl--safe-revision-p)
+
+(defun diff-hl--check-revision (rev)
+  "Signal an error unless REV is safe to pass to Git; return REV."
+  (unless (diff-hl--safe-revision-p rev)
+    (user-error "Invalid revision: %S" rev))
+  rev)
 
 (defun diff-hl--target-buffer (&optional buf)
-  "Return the correct buffer for the situation, preferring the base buffer."
+  "Return the base buffer of BUF, or BUF itself if it has none.
+BUF defaults to the current buffer."
   (let ((buf (or buf (current-buffer))))
     (or (buffer-base-buffer buf) buf)))
 
@@ -265,12 +280,16 @@ BUFFER defaults to the current buffer."
   "The margin width variable diff-hl set to 1 in the current buffer, if any.")
 
 (defun diff-hl--refresh-margins ()
+  "Make the windows showing the current buffer pick up its margin widths."
   (dolist (win (get-buffer-window-list nil nil t))
     (set-window-buffer win (current-buffer))))
 
 (defun diff-hl--ensure-margin ()
   "Make the margin on `diff-hl-side' at least one column wide."
   (let ((var (intern (format "%s-margin-width" diff-hl-side))))
+    ;; `diff-hl-side' changed since we widened the other margin.
+    (unless (memq diff-hl--margin-widened (list nil var))
+      (diff-hl--restore-margin))
     (when (zerop (symbol-value var))
       (set var 1)
       (setq diff-hl--margin-widened var)
@@ -298,6 +317,7 @@ BUFFER defaults to the current buffer."
          diff-hl--margin-spec-cache))))
 
 (defmacro diff-hl-with-diff-switches (body)
+  "Evaluate BODY with diff switches that produce hunks without context."
   `(progn
      (let ((vc-git-diff-switches
             ;; https://github.com/dgutov/diff-hl/issues/67
@@ -315,6 +335,7 @@ BUFFER defaults to the current buffer."
        ,body)))
 
 (defun diff-hl-modified-p (state)
+  "Return non-nil if a file in VC STATE may have changes to highlight."
   (or (memq state '(edited conflict))
       (and (eq state 'up-to-date)
            ;; VC state is stale in after-revert-hook.
@@ -331,6 +352,7 @@ BUFFER defaults to the current buffer."
 (declare-function vc-git-diff "vc-git")
 (declare-function vc-git-root "vc-git")
 (declare-function vc-git-previous-revision "vc-git")
+(declare-function vc-git-find-revision "vc-git")
 (declare-function vc-find-revision-no-save "vc")
 (declare-function ediff-buffers "ediff")
 (declare-function ediff-diff-at-point "ediff-util")
@@ -338,17 +360,27 @@ BUFFER defaults to the current buffer."
 (defvar ediff-number-of-differences)
 
 (defun diff-hl--use-git-index-base-p ()
-  "Whether diff-hl should use the Git index as the reference base."
+  "Return non-nil if diff-hl should use the Git index as the reference base."
   (and (not diff-hl-reference-revision)
        (not diff-hl-show-staged-changes)))
 
 (defun diff-hl-changes-buffer (file &optional new-rev bufname)
+  "Diff FILE against the reference, without context, into buffer BUFNAME.
+NEW-REV is passed to `diff-hl-diff-against-reference'.  BUFNAME defaults
+to \" *diff-hl* \".  Return the buffer name."
   (diff-hl-with-diff-switches
    (diff-hl-diff-against-reference file (or bufname " *diff-hl* ") new-rev)))
 
 (defconst diff-hl--git-empty-tree "4b825dc642cb6eb9a060e54bf8d69288fbee4904")
 
 (defun diff-hl-diff-against-reference (file buffer &optional new-rev)
+  "Insert the Git diff of FILE into BUFFER and return BUFFER.
+The old side is `diff-hl-reference-revision', HEAD or the index.  The
+new side is the working tree, or NEW-REV if non-nil: a revision, or
+`git-index' for the staged version."
+  (diff-hl--check-revision diff-hl-reference-revision)
+  (when (stringp new-rev)
+    (diff-hl--check-revision new-rev))
   (cond
    ((and (not new-rev)
          (diff-hl--use-git-index-base-p))
@@ -356,7 +388,7 @@ BUFFER defaults to the current buffer."
            (if (diff-hl--use-async-p) 'async 1)
            (list file)
            "diff-files"
-           (cons "-p" (vc-switches 'git 'diff))))
+           (append (cons "-p" (vc-switches 'git 'diff)) '("--"))))
    ((eq new-rev 'git-index)
     (apply #'vc-git-command buffer
            (if (diff-hl--use-async-p) 'async 1)
@@ -388,6 +420,11 @@ BUFFER defaults to the current buffer."
   buffer)
 
 (defun diff-hl-changes ()
+  "Start computing the changes in the current buffer's file.
+Return an alist with the keys `:working' (uncommitted changes) and
+`:reference' (changes against the reference revision).  Each value is
+a list of changes or the name of a buffer that receives a diff, possibly
+asynchronously; see `diff-hl--resolve'.  Return nil for non-Git files."
   (let* ((file (diff-hl--buffer-file-name))
          (hide-staged (not diff-hl-show-staged-changes)))
     (when (eq (vc-backend file) 'Git)
@@ -484,6 +521,7 @@ contents as they are (or would be) after applying the changes in NEW."
     ref))
 
 (defun diff-hl-changes-from-buffer (buf)
+  "Parse the diff in BUF into a list of (LINE INSERTS DELETES TYPE)."
   (with-current-buffer buf
     (let (res)
       (goto-char (point-min))
@@ -507,16 +545,18 @@ contents as they are (or would be) after applying the changes in NEW."
       (nreverse res))))
 
 (defun diff-hl--use-async-p ()
+  "Return non-nil if diffs should be computed asynchronously here."
   (and diff-hl-update-async
        (not
         (run-hook-with-args-until-success 'diff-hl-async-inhibit-functions
                                           default-directory))))
 
-(defvar-local diff-hl-timer nil)
+(defvar-local diff-hl-timer nil
+  "Pending idle timer that will update the current buffer, if any.")
 (put 'diff-hl-timer 'permanent-local t)
 
 (defun diff-hl-update ()
-  "Updates the diff-hl overlay."
+  "Update the diff-hl indicators in the current buffer."
   (setq diff-hl-timer nil)
   (if (and (diff-hl--use-async-p)
            (eq diff-hl-update-async 'thread))
@@ -535,12 +575,13 @@ contents as they are (or would be) after applying the changes in NEW."
     (diff-hl--update)))
 
 (defun diff-hl--update-buffer (buf)
+  "Run `diff-hl-update' in BUF if it's still live."
   (when (buffer-live-p buf)
     (with-current-buffer buf
       (diff-hl-update))))
 
 (defun diff-hl--update-safe ()
-  "Updates the diff-hl overlay. It handles and logs when an error is signaled."
+  "Update the diff-hl indicators, logging any error instead of signaling it."
   (condition-case-unless-debug err
       (diff-hl--update)
     (error
@@ -548,7 +589,7 @@ contents as they are (or would be) after applying the changes in NEW."
      nil)))
 
 (defun diff-hl--update-overlays (changes reuse &optional reference)
-  "Updates the diff-hl overlays based on CHANGES.
+  "Update the diff-hl overlays based on CHANGES.
 REUSE is a list of existing line overlays that can be used.
 REFERENCE non-nil means CHANGES are against the reference revision.
 Return a list of line overlays used."
@@ -593,11 +634,19 @@ Return a list of line overlays used."
     (nreverse ovls)))
 
 (defun diff-hl--no-query-on-exit (value)
+  "Don't ask about killing the diff process of buffer VALUE on exit.
+VALUE is a value from `diff-hl-changes'; lists are ignored."
   (when-let* ((buf (and (stringp value) (get-buffer value)))
               (proc (get-buffer-process buf)))
     (set-process-query-on-exit-flag proc nil)))
 
 (defun diff-hl--update ()
+  "Recompute the changes and redraw the indicators of the current buffer.
+Also redraw them in the other buffers sharing its base buffer."
+  ;; Reserve the margin in Git files only, even while they're unchanged,
+  ;; so that the text doesn't shift when the first change appears.
+  (when (eq (vc-backend (diff-hl--buffer-file-name)) 'Git)
+    (diff-hl--ensure-margin))
   (let* ((orig (current-buffer))
          (cc (diff-hl-changes))
          (working (assoc-default :working cc))
@@ -625,6 +674,9 @@ Return a list of line overlays used."
                         (diff-hl--update-overlays changes reuse))))))))))))))
 
 (defun diff-hl--resolve (value-or-buffer cb)
+  "Call CB with the list of changes in VALUE-OR-BUFFER.
+If it's a buffer name, wait for its diff process to finish and parse
+the diff."
   (if (listp value-or-buffer)
       (funcall cb value-or-buffer)
     (static-if (fboundp 'vc-run-delayed-success)
@@ -638,6 +690,8 @@ Return a list of line overlays used."
                           cb))))
 
 (defun diff-hl--when-done (buffer get-value callback &optional proc)
+  "Call CALLBACK with the result of GET-VALUE on BUFFER when PROC is done.
+PROC defaults to BUFFER's process.  If there's none, call it right away."
   (let ((proc (or proc (get-buffer-process buffer))))
     (cond
      ;; If there's no background process, just execute the code.
@@ -661,8 +715,9 @@ Return a list of line overlays used."
      (t (error "Unexpected process state")))))
 
 (defun diff-hl-update-once ()
-  ;; Ensure that the update happens once, after all major mode changes.
-  ;; That will keep the the local value of <side>-margin-width, if any.
+  "Schedule one update of the current buffer, when Emacs is idle.
+Doing it once, after all major mode changes, also keeps the local value
+of the margin width, if any."
   (unless diff-hl-timer
     (setq diff-hl-timer
           (run-with-idle-timer 0 nil #'diff-hl--update-buffer (current-buffer)))))
@@ -677,20 +732,23 @@ OVL is an existing overlay to reuse."
     o))
 
 (defun diff-hl-remove-overlays (&optional beg end)
+  "Delete the diff-hl overlays between BEG and END (default: everywhere)."
   (save-restriction
     (widen)
     (dolist (o (overlays-in (or beg (point-min)) (or end (point-max))))
       (when (overlay-get o 'diff-hl) (delete-overlay o)))))
 
 (defun diff-hl-overlay-modified (ov after-p _beg _end &optional _length)
-  "Delete the hunk overlay and all our line overlays inside it."
+  "Delete the hunk overlay OV and all our line overlays inside it.
+Do it before the change, when AFTER-P is nil."
   (unless after-p
     (when (overlay-buffer ov)
       (diff-hl-remove-overlays (overlay-start ov) (overlay-end ov))
       (delete-overlay ov))))
 
 (defun diff-hl-edit (_beg _end _len)
-  "DTRT when we've `undo'-ne the buffer into unmodified state."
+  "Schedule `diff-hl-after-undo' when a change comes from an undo.
+Undoing back to the unmodified state should restore the indicators."
   (when undo-in-progress
     (when diff-hl-timer
       (cancel-timer diff-hl-timer))
@@ -698,12 +756,19 @@ OVL is an existing overlay to reuse."
           (run-with-idle-timer 0.01 nil #'diff-hl-after-undo (current-buffer)))))
 
 (defun diff-hl-after-undo (buffer)
+  "Update BUFFER if undo has made it unmodified."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
+      ;; The timer has fired; a stale value would block
+      ;; `diff-hl-update-once'.
+      (setq diff-hl-timer nil)
       (unless (buffer-modified-p)
         (diff-hl-update)))))
 
 (defun diff-hl-diff-goto-hunk-1 (historic rev1)
+  "Show the diff of the current file against REV1, at the current line.
+If HISTORIC is non-nil, read both revisions, with REV1 as the default
+for the older one."
   (defvar vc-sentinel-movepoint)
   (with-current-buffer (diff-hl--target-buffer)
     (vc-buffer-sync))
@@ -714,6 +779,8 @@ OVL is an existing overlay to reuse."
       (let ((revs (diff-hl-diff-read-revisions rev1)))
         (setq rev1 (car revs)
               rev2 (cdr revs))))
+    (diff-hl--check-revision rev1)
+    (diff-hl--check-revision rev2)
     (vc-diff-internal
      (if (boundp 'vc-allow-async-diff)
          vc-allow-async-diff
@@ -727,8 +794,9 @@ OVL is an existing overlay to reuse."
 
 (defun diff-hl-diff-goto-hunk (&optional historic)
   "Run VC diff command and go to the corresponding line in diff.
-With double prefix argument (C-u C-u), the diff is made against the
-reference revision."
+With a prefix argument HISTORIC, read the revisions to compare.  With a
+double prefix argument (\\[universal-argument] \\[universal-argument]),
+the diff is made against the reference revision."
   (interactive (list current-prefix-arg))
   (with-current-buffer (current-buffer)
     (if (equal historic '(16))
@@ -753,6 +821,7 @@ buffer will show the position corresponding to its current line."
           relname)
       (unless (eq (vc-deduce-backend) 'Git)
         (error "Directory is not under Git control"))
+      (diff-hl--check-revision diff-hl-reference-revision)
       (setq rootdir (vc-git-root default-directory)
             default-directory rootdir
             fileset `(Git (,rootdir))
@@ -813,6 +882,9 @@ buffer will show the position corresponding to its current line."
     (ediff-buffers refbuf (current-buffer) startup)))
 
 (defun diff-hl-diff-read-revisions (rev1-default)
+  "Read the older and newer revisions to compare the current file.
+REV1-DEFAULT is the default older revision.  Return (REV1 . REV2), where
+nil means the working tree."
   (let* ((file (diff-hl--buffer-file-name))
          (files (list file))
          (rev2-default nil))
@@ -841,8 +913,9 @@ buffer will show the position corresponding to its current line."
       (cons rev1 rev2))))
 
 (defun diff-hl-diff-skip-to (line &optional filename)
-  "In `diff-mode', skip to the hunk and line corresponding to LINE
-in the source file, or the last line of the hunk above it.
+  "In `diff-mode', skip to the hunk and line corresponding to LINE.
+LINE is a line in the source file.  Without an exact match, go to the
+last line of the hunk above it.
 
 When passed FILENAME, ensure that the line is in the section belonging to
 that file, if it's present."
@@ -888,6 +961,8 @@ that file, if it's present."
   "Face used to highlight the first column of the hunk to be reverted.")
 
 (defun diff-hl-revert-highlight-first-column (end)
+  "Highlight the first column of the minimal hunk after point.
+END is ignored; the hunk's end is recomputed."
   (re-search-forward "^[+-]")
   (forward-line 0)
   (setq end (diff-hl-split-away-changes 0))
@@ -899,9 +974,11 @@ that file, if it's present."
         (forward-line 1)))))
 
 (defun diff-hl-revert-narrow-to-hunk (end)
+  "Narrow the diff buffer to the hunk between point and END."
   (narrow-to-region (point) end))
 
 (defun diff-hl-revert-hunk-1 ()
+  "Show the hunk at point in a diff buffer and revert it after confirmation."
   (save-restriction
     (widen)
     (with-current-buffer (diff-hl--target-buffer)
@@ -960,7 +1037,7 @@ that file, if it's present."
   "Split away the minimal hunk at point from the rest of the hunk.
 
 The minimal hunk is the hunk a diff program would produce if
-asked for 0 lines of context. Add MAX-CONTEXT lines of context at
+asked for 0 lines of context.  Add MAX-CONTEXT lines of context at
 most (stop when encounter another minimal hunk).
 
 Move point to the beginning of the delineated hunk and return
@@ -987,12 +1064,13 @@ its end position."
     end-marker))
 
 (defun diff-hl-revert-hunk ()
-  "Revert the diff hunk with changes at or above the point."
+  "Revert the diff hunk with changes at or above point."
   (interactive)
   (with-current-buffer (current-buffer)
     (diff-hl-revert-hunk-1)))
 
 (defun diff-hl-hunk-overlay-at (pos)
+  "Return the diff-hl hunk overlay at POS, if any."
   (cl-loop for o in (overlays-in pos (1+ pos))
            when (overlay-get o 'diff-hl-hunk)
            return o))
@@ -1010,7 +1088,8 @@ its end position."
             (throw 'found o)))))))
 
 (defun diff-hl-next-hunk (&optional backward)
-  "Go to the beginning of the next hunk in the current buffer."
+  "Go to the beginning of the next hunk in the current buffer.
+If BACKWARD is non-nil, go to the previous one instead."
   (interactive)
   (let ((overlay (diff-hl-search-next-hunk backward)))
     (unless overlay
@@ -1025,6 +1104,7 @@ its end position."
   (diff-hl-next-hunk t))
 
 (defun diff-hl-find-current-hunk ()
+  "Move point into the hunk at point, or else the previous or next hunk."
   (let ((o)
         (diff-hl-next-previous-hunk-auto-recenter nil))
     (cond
@@ -1035,6 +1115,7 @@ its end position."
       (diff-hl-next-hunk)))))
 
 (defun diff-hl-mark-hunk ()
+  "Put the region around the hunk at point."
   (interactive)
   (let ((hunk (diff-hl-hunk-overlay-at (point))))
     (unless hunk
@@ -1043,10 +1124,13 @@ its end position."
     (push-mark (overlay-end hunk) nil t)))
 
 (defun diff-hl--ensure-staging-supported ()
+  "Signal an error unless the current file is under Git."
   (unless (eq (vc-backend (diff-hl--buffer-file-name)) 'Git)
     (user-error "This file is not under Git control")))
 
 (defun diff-hl-stage-diff (orig-buffer)
+  "Stage the patch in the current buffer, in the repository of ORIG-BUFFER.
+Return non-nil on success."
   (let ((patchfile (make-nearby-temp-file "diff-hl-stage-patch"))
         success)
     (write-region (point-min) (point-max) patchfile
@@ -1104,40 +1188,42 @@ Only supported with Git."
         (diff-hl-update)))))
 
 (defun diff-hl-unstage-file ()
-  "Unstage all changes in the current file.
-
-Only supported with Git."
+  "Unstage everything staged in the current file."
   (interactive)
   (let ((file (diff-hl--buffer-file-name)))
     (unless file
       (user-error "No current file"))
     (diff-hl--ensure-staging-supported)
-    (vc-git-command nil 0 file "reset")
+    (vc-git-command nil 0 file "reset" "--")
     (message "Unstaged all")
     (unless diff-hl-show-staged-changes
       (diff-hl-update))))
 
 (defun diff-hl-stage-dwim (&optional with-edit)
   "Stage the current hunk or choose the hunks to stage.
-When called with the prefix argument, invokes `diff-hl-stage-some'."
+With a prefix argument WITH-EDIT, or when the region is active, invoke
+`diff-hl-stage-some'."
   (interactive "P")
   (if (or with-edit (region-active-p))
       (call-interactively #'diff-hl-stage-some)
     (call-interactively #'diff-hl-stage-current-hunk)))
 
-(defvar diff-hl-stage--orig nil)
+(defvar diff-hl-stage--orig nil
+  "The buffer whose changes are being staged from this diff buffer.")
 
 (define-derived-mode diff-hl-stage-diff-mode diff-mode "Stage Diff"
   "Major mode for editing a diff buffer before staging.
 
-\\[diff-hl-stage-commit]"
+\\<diff-hl-stage-diff-mode-map>\\[diff-hl-stage-finish] stages the edited diff."
   (setq revert-buffer-function #'ignore))
 
 (define-key diff-hl-stage-diff-mode-map (kbd "C-c C-c") #'diff-hl-stage-finish)
 
 (defun diff-hl-stage-some (&optional beg end)
   "Stage some or all of the current changes, interactively.
-Pops up a diff buffer that can be edited to choose the changes to stage."
+Pop up a diff buffer that can be edited to choose the changes to stage.
+When BEG and END are non-nil (interactively, the region), only include
+the changes between them."
   (interactive "r")
   (diff-hl--ensure-staging-supported)
   (let* ((line-beg (and beg (line-number-at-pos beg t)))
@@ -1188,6 +1274,7 @@ Pops up a diff buffer that can be edited to choose the changes to stage."
              (substitute-command-keys "\\[diff-hl-stage-finish]"))))
 
 (defun diff-hl-stage-finish ()
+  "Stage the diff in the current buffer and bury it."
   (interactive)
   (let ((count 0)
         (orig-buffer diff-hl-stage--orig))
@@ -1226,7 +1313,6 @@ The value of this variable is a mode line template as in
             (,diff-hl-command-prefix . diff-hl-command-map))
   (if diff-hl-mode
       (progn
-        (diff-hl--ensure-margin)
         (add-hook 'after-save-hook 'diff-hl-update nil t)
         (add-hook 'after-change-functions 'diff-hl-edit nil t)
         (add-hook (if vc-mode
@@ -1242,10 +1328,7 @@ The value of this variable is a mode line template as in
         ;; Never removed because it acts globally.
         (add-hook 'vc-checkin-hook 'diff-hl-after-checkin)
         (add-hook 'after-revert-hook 'diff-hl-update-once nil t)
-        (when-let* ((rev (cdr
-                          (cl-find-if
-                           (lambda (pair) (string-prefix-p (car pair) default-directory))
-                           diff-hl-reference-revision-projects-cache))))
+        (when-let* ((rev (diff-hl--project-reference default-directory)))
           (setq-local diff-hl-reference-revision rev)))
     (remove-hook 'after-save-hook 'diff-hl-update t)
     (remove-hook 'after-change-functions 'diff-hl-edit t)
@@ -1256,6 +1339,7 @@ The value of this variable is a mode line template as in
     (kill-local-variable 'diff-hl-reference-revision)))
 
 (defun diff-hl-after-checkin ()
+  "Update the buffers visiting the files that were just committed."
   (let ((fileset (vc-deduce-fileset t)))
     (dolist (file (nth 1 fileset))
       (let ((buf (find-buffer-visiting file)))
@@ -1264,7 +1348,8 @@ The value of this variable is a mode line template as in
             (when diff-hl-mode
               (diff-hl-update))))))))
 
-(defvar diff-hl-repeat-exceptions '(diff-hl-ediff-current-hunk))
+(defvar diff-hl-repeat-exceptions '(diff-hl-ediff-current-hunk)
+  "Commands in `diff-hl-command-map' that `repeat-mode' doesn't repeat.")
 
 ;; Integrate with `repeat-mode' (https://debbugs.gnu.org/47566).
 (map-keymap
@@ -1274,6 +1359,7 @@ The value of this variable is a mode line template as in
  diff-hl-command-map)
 
 (defun diff-hl-dir-update ()
+  "Clear the indicators of the files that this `vc-dir' commit made clean."
   (dolist (pair (if (vc-dir-marked-files)
                     (vc-dir-marked-only-files-and-states)
                   (vc-dir-child-files-and-states)))
@@ -1290,54 +1376,79 @@ The value of this variable is a mode line template as in
       (add-hook 'vc-checkin-hook 'diff-hl-dir-update t t)
     (remove-hook 'vc-checkin-hook 'diff-hl-dir-update t)))
 
-(defun diff-hl-make-temp-file-name (file rev &optional manual)
-  "Return a backup file name for REV or the current version of FILE.
-If MANUAL is non-nil it means that a name for backups created by
-the user should be returned."
-  (let* ((auto-save-file-name-transforms
-          `((".*" ,temporary-file-directory t)))
-         (buffer-file-name file))
-    (expand-file-name
-     (concat (make-auto-save-file-name)
-             ".~" (subst-char-in-string
-                   ?/ ?_ rev)
-             (unless manual ".") "~")
-     temporary-file-directory)))
-
-(defun diff-hl-create-revision (file revision)
-  "Read REVISION of FILE into a buffer and return the buffer."
-  (let ((automatic-backup (diff-hl-make-temp-file-name file revision))
-        (filebuf (get-file-buffer file))
-        (filename (diff-hl-make-temp-file-name file revision 'manual)))
-    (unless (file-exists-p filename)
-      (if (file-exists-p automatic-backup)
-          (rename-file automatic-backup filename nil)
-        (with-current-buffer filebuf
-          (let ((coding-system-for-read 'no-conversion)
-                (coding-system-for-write 'no-conversion))
-            (condition-case nil
-                (with-temp-file filename
-                  (let ((outbuf (current-buffer)))
-                    ;; Change buffer to get local value of
-                    ;; vc-checkout-switches.
-                    (with-current-buffer filebuf
-                      (vc-call find-revision file revision outbuf))))
-              (error
-               (when (file-exists-p filename)
-                 (delete-file filename))))))))
-    filename))
-
-(declare-function diff-no-select "diff")
-
 (defvar diff-hl-temporary-directory (if (and (eq system-type 'gnu/linux)
                                              (file-directory-p "/dev/shm/"))
                                         "/dev/shm/"
-                                      temporary-file-directory))
+                                      temporary-file-directory)
+  "Directory in which diff-hl creates its private snapshot directory.")
+
+(defvar diff-hl--snapshot-directory nil
+  "Private directory holding the old file versions diff-hl compares against.
+Created on demand and deleted when Emacs exits.")
+
+(defun diff-hl--snapshot-directory ()
+  "Return the private snapshot directory, creating it if needed."
+  (unless (and diff-hl--snapshot-directory
+               (file-directory-p diff-hl--snapshot-directory))
+    ;; `make-temp-file' picks an unpredictable name and creates the
+    ;; directory with mode 0700, so other users can't read or plant
+    ;; snapshots.
+    (setq diff-hl--snapshot-directory
+          (let ((temporary-file-directory diff-hl-temporary-directory))
+            (file-name-as-directory (make-temp-file "diff-hl-" t))))
+    (add-hook 'kill-emacs-hook #'diff-hl--delete-snapshot-directory))
+  diff-hl--snapshot-directory)
+
+(defun diff-hl--delete-snapshot-directory ()
+  "Delete the private snapshot directory and everything in it."
+  (when (and diff-hl--snapshot-directory
+             (file-directory-p diff-hl--snapshot-directory))
+    (delete-directory diff-hl--snapshot-directory t))
+  (setq diff-hl--snapshot-directory nil))
+
+(defun diff-hl--snapshot-file-name (file id)
+  "Return the snapshot file name for the version of FILE identified by ID.
+ID contains a commit or blob hash, so an existing snapshot never goes
+stale and can be reused."
+  (expand-file-name
+   (format "%s-%s.~%s~"
+           (substring (md5 file) 0 8)
+           (file-name-nondirectory file)
+           id)
+   (diff-hl--snapshot-directory)))
+
+(defun diff-hl--write-snapshot (file filename writer)
+  "Create FILENAME by calling WRITER with an output buffer, unless it exists.
+WRITER is called with FILE's buffer current.  Return FILENAME."
+  (let ((filebuf (get-file-buffer file)))
+    (unless (file-exists-p filename)
+      (with-current-buffer filebuf
+        (let ((coding-system-for-read 'no-conversion)
+              (coding-system-for-write 'no-conversion))
+          (condition-case nil
+              (with-temp-file filename
+                (let ((outbuf (current-buffer)))
+                  (with-current-buffer filebuf
+                    (funcall writer outbuf))))
+            (error
+             (when (file-exists-p filename)
+               (delete-file filename)))))))
+    filename))
+
+(defun diff-hl-create-revision (file revision)
+  "Write REVISION of FILE to a snapshot file and return its name."
+  (diff-hl--write-snapshot
+   file (diff-hl--snapshot-file-name file revision)
+   ;; Run in FILE's buffer to get the local value of
+   ;; `vc-checkout-switches'.
+   (lambda (outbuf) (vc-git-find-revision file revision outbuf))))
+
+(declare-function diff-no-select "diff")
 
 (defun diff-hl-diff-buffer-with-reference (file &optional dest-buffer context-lines)
-  "Compute the diff between the current buffer contents and reference.
-The diffs are computed in the buffer DEST-BUFFER. This requires
-the `diff-program' to be in your `exec-path'.
+  "Diff the current buffer contents of FILE against the reference.
+The diff goes into the buffer DEST-BUFFER, which is returned.  This
+requires the program `diff-program' to be in your variable `exec-path'.
 CONTEXT-LINES is the size of the unified diff context, defaults to 0."
   (require 'diff)
   (unless file
@@ -1365,37 +1476,27 @@ CONTEXT-LINES is the size of the unified diff context, defaults to 0."
       (get-buffer-create dest-buffer))))
 
 (defun diff-hl-resolved-revision (revision)
-  (vc-git--rev-parse revision))
+  "Return the commit hash that REVISION refers to."
+  (vc-git--rev-parse (diff-hl--check-revision revision)))
 
 ;; TODO: Cache based on .git/index's mtime, maybe.
 (defun diff-hl-git-index-object-name (file)
+  "Return the hash of FILE's blob in the Git index, or nil."
   (with-temp-buffer
-    (vc-git-command (current-buffer) 0 file "ls-files" "-s")
+    (vc-git-command (current-buffer) 0 file "ls-files" "-s" "--")
     (and
      (goto-char (point-min))
      (re-search-forward "^[0-9]+ \\([0-9a-f]+\\)" nil t)
      (match-string-no-properties 1))))
 
 (defun diff-hl-git-index-revision (file object-name)
-  (let ((filename (diff-hl-make-temp-file-name file
-                                               (concat ";" object-name)
-                                               'manual))
-        (filebuf (get-file-buffer file)))
-    (unless (file-exists-p filename)
-      (with-current-buffer filebuf
-        (let ((coding-system-for-read 'no-conversion)
-              (coding-system-for-write 'no-conversion))
-          (condition-case nil
-              (with-temp-file filename
-                (let ((outbuf (current-buffer)))
-                  ;; Change buffer to be inside the repo.
-                  (with-current-buffer filebuf
-                    (vc-git-command outbuf 0 nil
-                                    "cat-file" "blob" object-name))))
-            (error
-             (when (file-exists-p filename)
-               (delete-file filename)))))))
-    filename))
+  "Write the index blob OBJECT-NAME of FILE to a snapshot file.
+Return the snapshot file name."
+  (diff-hl--write-snapshot
+   file (diff-hl--snapshot-file-name file (concat "index-" object-name))
+   ;; Run in FILE's buffer to be inside the repo.
+   (lambda (outbuf)
+     (vc-git-command outbuf 0 nil "cat-file" "blob" object-name))))
 
 ;;;###autoload
 (defun turn-on-diff-hl-mode ()
@@ -1452,6 +1553,7 @@ view buffer.
         (vc-read-revision prompt nil nil def)))))
   (if (not rev)
       (diff-hl-reset-reference-rev)
+    (diff-hl--check-revision rev)
     (let ((proj (diff-hl--current-project)))
       (diff-hl--set-project-reference proj rev)
       (message "Showing changes against %s (project %s)"
@@ -1467,11 +1569,24 @@ view buffer.
              (project-name proj))))
 
 (defun diff-hl--current-project ()
+  "Return the current project, or signal an error if there's none."
   (or (project-current)
       (user-error "Not in a project")))
 
 (defun diff-hl--project-root (proj)
+  "Return the expanded root directory of the project PROJ."
   (expand-file-name (project-root proj)))
+
+(defun diff-hl--project-reference (dir)
+  "Return the reference revision remembered for the project containing DIR.
+With nested projects, the innermost one wins."
+  (let ((dir (expand-file-name dir))
+        best)
+    (dolist (pair diff-hl-reference-revision-projects-cache)
+      (when (and (string-prefix-p (car pair) dir)
+                 (> (length (car pair)) (length (car best))))
+        (setq best pair)))
+    (cdr best)))
 
 (defun diff-hl--set-project-reference (proj rev)
   "Use REV as the reference revision in the project PROJ.
@@ -1496,6 +1611,7 @@ nil means the most recent revision."
   diff-hl--global-turn-on :after-hook (diff-hl-global-mode-change))
 
 (defun diff-hl-global-mode-change ()
+  "Turn off `diff-hl-dir-mode' everywhere when `global-diff-hl-mode' is off."
   (unless global-diff-hl-mode
     (dolist (buf (buffer-list))
       (with-current-buffer buf

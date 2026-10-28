@@ -1,4 +1,6 @@
-;; Copyright (C) 2015-2026 Free Software Foundation, Inc. -*- lexical-binding: t -*-
+;;; diff-hl-flydiff.el --- Highlight changes on the fly -*- lexical-binding: t -*-
+
+;; Copyright (C) 2015-2026 Free Software Foundation, Inc.
 
 ;; Author:   Jonathan Hayase <PythonNut@gmail.com>
 ;; URL:      https://github.com/dgutov/diff-hl
@@ -20,8 +22,8 @@
 
 ;;; Commentary:
 
-;; This mode enables diffing on-the-fly (i.e. without saving the buffer first)
-;; Toggle in all buffers with M-x diff-hl-flydiff-mode
+;; This mode enables diffing on-the-fly (i.e. without saving the buffer
+;; first).  Toggle in all buffers with M-x diff-hl-flydiff-mode.
 
 ;;; Code:
 
@@ -29,18 +31,22 @@
 (require 'diff)
 
 (defgroup diff-hl-flydiff nil
-  "Highlight changes on the fly"
+  "Highlight changes on the fly."
   :group 'diff-hl)
 
 (defcustom diff-hl-flydiff-delay 0.3
   "The idle delay in seconds before highlighting is updated."
   :type 'number)
 
-(defvar diff-hl-flydiff-modified-tick nil)
-(defvar diff-hl-flydiff-timer nil)
-(make-variable-buffer-local 'diff-hl-flydiff-modified-tick)
+(defvar-local diff-hl-flydiff-modified-tick nil
+  "Value of `buffer-chars-modified-tick' at the last on-the-fly update.")
+
+(defvar diff-hl-flydiff-timer nil
+  "Repeating idle timer that runs `diff-hl-flydiff-update'.")
 
 (defun diff-hl-flydiff-changes-buffer (file &optional new-rev buffer)
+  "Like `diff-hl-changes-buffer', but use the unsaved contents of FILE.
+NEW-REV and BUFFER are as in `diff-hl-changes-buffer'."
   (setq buffer (or buffer " *diff-hl-diff*"))
   (if new-rev
       (diff-hl-with-diff-switches
@@ -48,6 +54,7 @@
     (diff-hl-diff-buffer-with-reference file buffer)))
 
 (defun diff-hl-flydiff-update ()
+  "Update the current buffer if it changed since the last update."
   (unless (or
            (not diff-hl-mode)
            (eq diff-hl-flydiff-modified-tick (buffer-chars-modified-tick))
@@ -59,6 +66,7 @@
     (diff-hl-update)))
 
 (defun diff-hl-flydiff/modified-p (state)
+  "Return non-nil if the buffer of a file in VC STATE has unsaved changes."
   (unless (memq state '(added missing nil))
     (buffer-modified-p)))
 
@@ -87,3 +95,5 @@ This is a global minor mode.  It alters how `diff-hl-mode' works."
     (advice-remove 'diff-hl-changes-buffer #'diff-hl-flydiff-changes-buffer)))
 
 (provide 'diff-hl-flydiff)
+
+;;; diff-hl-flydiff.el ends here

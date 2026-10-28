@@ -72,7 +72,6 @@
   :lighter ""
   (if diff-hl-dired-mode
       (progn
-        (diff-hl--ensure-margin)
         (set (make-local-variable 'diff-hl-dired-process-buffer) nil)
         (add-hook 'dired-after-readin-hook 'diff-hl-dired-update 10 t))
     (remove-hook 'dired-after-readin-hook 'diff-hl-dired-update t)
@@ -85,6 +84,7 @@
         (buffer (current-buffer))
         dirs-alist files-alist)
     (when (eq (ignore-errors (vc-responsible-backend default-directory)) 'Git)
+      (diff-hl--ensure-margin)
       (if (buffer-live-p diff-hl-dired-process-buffer)
           (let ((proc (get-buffer-process diff-hl-dired-process-buffer)))
             (when proc (kill-process proc)))
@@ -132,7 +132,9 @@
 
 (defun diff-hl-dired-status-files (dir files update-function)
   "Using Git, fetch list of (FILE STATE EXTRA) entries for DIR.
-Call UPDATE-FUNCTION as entries are added."
+Call UPDATE-FUNCTION as entries are added.  FILES are the files listed
+in the Dired buffer, checked for being ignored when
+`diff-hl-dired-extra-indicators' is non-nil."
   (vc-git-dir-status-files
    dir nil
    (lambda (entries &optional more-to-come)
@@ -148,6 +150,8 @@ Call UPDATE-FUNCTION as entries are added."
        ))))
 
 (defun diff-hl-dired-nondirectory-files ()
+  "Return the non-directory files in the Dired buffer's directories.
+Names are relative to `default-directory'."
   (cl-mapcan
    (lambda (entry)
      (let* ((dir (file-relative-name (car entry)))
@@ -168,6 +172,7 @@ Call UPDATE-FUNCTION as entries are added."
 (declare-function make-vc-git-dir-status-state "vc-git")
 
 (defun diff-hl-dir-status-ignored-files (files update-function)
+  "Call UPDATE-FUNCTION with the entries for those of FILES Git ignores."
   (vc-git-dir-status-goto-stage
    (make-vc-git-dir-status-state :stage 'ls-files-ignored
                                  :files files
@@ -192,6 +197,7 @@ Call UPDATE-FUNCTION as entries are added."
 
 ;;;###autoload
 (defun diff-hl-dired-mode-unless-remote ()
+  "Turn on `diff-hl-dired-mode' unless the directory is remote."
   (unless (file-remote-p default-directory)
     (diff-hl-dired-mode)))
 

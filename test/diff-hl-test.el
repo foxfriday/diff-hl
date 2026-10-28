@@ -225,6 +225,154 @@
 Diff finished."
                  (buffer-substring (point) (point-max))))))))
 
+;;; Tests in throwaway repositories
+
+(defun diff-hl-test-git (&rest args)
+  (with-temp-buffer
+    (unless (zerop (apply #'process-file "git" nil t nil args))
+      (error "git %S failed: %s" args (buffer-string)))))
+
+(defun diff-hl-test-write (file content)
+  (with-temp-file file (insert content)))
+
+(defun diff-hl-test-read (file)
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(defmacro diff-hl-test-with-repo (&rest body)
+  "Run BODY in a new Git repository, deleted afterwards."
+  `(let* ((dir (file-name-as-directory (make-temp-file "diff-hl-test-" t)))
+          (default-directory dir))
+     (unwind-protect
+         (progn
+           (diff-hl-test-git "init" "-q")
+           (diff-hl-test-git "config" "user.email" "test@example.com")
+           (diff-hl-test-git "config" "user.name" "Test")
+           ,@body)
+       (dolist (buf (buffer-list))
+         (when (string-prefix-p dir (or (buffer-file-name buf) ""))
+           (with-current-buffer buf (set-buffer-modified-p nil))
+           (kill-buffer buf)))
+       (delete-directory dir t))))
+(put 'diff-hl-test-with-repo 'lisp-indent-function 0)
+
+(defun diff-hl-test-commit (&rest files-and-contents)
+  "Write FILES-AND-CONTENTS (file, content, ...) and commit them."
+  (let (files)
+    (while files-and-contents
+      (diff-hl-test-write (car files-and-contents) (cadr files-and-contents))
+      (push (car files-and-contents) files)
+      (setq files-and-contents (cddr files-and-contents)))
+    (apply #'diff-hl-test-git "add" "--" files)
+    (diff-hl-test-git "commit" "-qm" "commit")))
+
+(ert-deftest diff-hl-safe-revision ()
+  (should (diff-hl--safe-revision-p nil))
+  (should (diff-hl--safe-revision-p "HEAD~1"))
+  (should-not (diff-hl--safe-revision-p ""))
+  (should-not (diff-hl--safe-revision-p "--output=/tmp/x"))
+  (should-not (diff-hl--safe-revision-p 'HEAD))
+  (should (eq (get 'diff-hl-reference-revision 'safe-local-variable)
+              #'diff-hl--safe-revision-p)))
+
+(ert-deftest diff-hl-option-like-revision-is-rejected ()
+  (diff-hl-test-with-repo
+    (diff-hl-test-commit "f.txt" "a\n")
+    (diff-hl-test-write "f.txt" "b\n")
+    (let ((diff-hl-reference-revision
+           (concat "--output=" (expand-file-name "pwned"))))
+      (with-temp-buffer
+        (should-error (diff-hl-diff-against-reference
+                       (expand-file-name "f.txt") (current-buffer))
+                      :type 'user-error))
+      (should-error (diff-hl-resolved-revision diff-hl-reference-revision)
+                    :type 'user-error))
+    (should-not (file-exists-p "pwned"))))
+
+(ert-deftest diff-hl-option-like-file-name-in-diff-files ()
+  (diff-hl-test-with-repo
+    (diff-hl-test-commit "keep.txt" "keep\n" "--output=keep.txt" "a\n")
+    (diff-hl-test-write "--output=keep.txt" "b\n")
+    (let ((diff-hl-show-staged-changes nil)
+          (diff-hl-reference-revision nil)
+          (diff-hl-update-async nil))
+      (with-temp-buffer
+        (diff-hl-diff-against-reference (expand-file-name "--output=keep.txt")
+                                        (current-buffer))))
+    (should (equal (diff-hl-test-read "keep.txt") "keep\n"))))
+
+(ert-deftest diff-hl-option-like-file-name-in-unstage ()
+  (diff-hl-test-with-repo
+    (diff-hl-test-commit "a.txt" "a\n" "--hard" "x\n")
+    (diff-hl-test-write "a.txt" "changed\n")
+    (diff-hl-test-write "--hard" "y\n")
+    (diff-hl-test-git "add" "--" "--hard")
+    (with-current-buffer (find-file-noselect (expand-file-name "--hard"))
+      (should (diff-hl-git-index-object-name (diff-hl--buffer-file-name)))
+      (let ((diff-hl-show-staged-changes t))
+        (diff-hl-unstage-file)))
+    ;; A `git reset --hard' would have discarded this change.
+    (should (equal (diff-hl-test-read "a.txt") "changed\n"))))
+
+(ert-deftest diff-hl-snapshots-are-private ()
+  (let ((diff-hl--snapshot-directory nil))
+    (unwind-protect
+        (diff-hl-test-with-repo
+          (diff-hl-test-commit "f.txt" "old\n")
+          (let* ((dir (diff-hl--snapshot-directory))
+                 (file (expand-file-name "f.txt"))
+                 (snapshot (with-current-buffer (find-file-noselect file)
+                             (diff-hl-create-revision
+                              file (diff-hl-resolved-revision "HEAD")))))
+            (should (= (file-modes dir) #o700))
+            (should (string-prefix-p dir snapshot))
+            (should (equal (diff-hl-test-read snapshot) "old\n"))))
+      (diff-hl--delete-snapshot-directory))))
+
+(ert-deftest diff-hl-margin-restored-after-side-change ()
+  (with-temp-buffer
+    (let ((diff-hl-side 'right)) (diff-hl--ensure-margin))
+    (should (= right-margin-width 1))
+    (let ((diff-hl-side 'left)) (diff-hl--ensure-margin))
+    (should (= right-margin-width 0))
+    (should (= left-margin-width 1))
+    (diff-hl--restore-margin)
+    (should (= left-margin-width 0))))
+
+(ert-deftest diff-hl-margin-only-in-git-files ()
+  (let ((dir (make-temp-file "diff-hl-nogit-" t))
+        (diff-hl-side 'right))
+    (unwind-protect
+        (with-current-buffer (find-file-noselect (expand-file-name "f.txt" dir))
+          (diff-hl-mode 1)
+          (diff-hl--update)
+          (should (= right-margin-width 0))
+          (kill-buffer))
+      (delete-directory dir t)))
+  (diff-hl-test-with-repo
+    (diff-hl-test-commit "f.txt" "a\n")
+    (with-current-buffer (find-file-noselect (expand-file-name "f.txt"))
+      (let ((diff-hl-side 'right))
+        (diff-hl-mode 1)
+        (diff-hl--update)
+        (should (= right-margin-width 1))
+        (diff-hl-mode -1)
+        (should (= right-margin-width 0))))))
+
+(ert-deftest diff-hl-after-undo-clears-timer ()
+  (with-temp-buffer
+    (insert "still modified")
+    (setq diff-hl-timer (timer-create))
+    (diff-hl-after-undo (current-buffer))
+    (should-not diff-hl-timer)))
+
+(ert-deftest diff-hl-project-reference-innermost ()
+  (let ((diff-hl-reference-revision-projects-cache
+         (list (cons (expand-file-name "~/outer/") "outer-rev")
+               (cons (expand-file-name "~/outer/inner/") "inner-rev"))))
+    (should (equal (diff-hl--project-reference "~/outer/inner/sub/") "inner-rev"))
+    (should (equal (diff-hl--project-reference "~/outer/sub/") "outer-rev"))
+    (should-not (diff-hl--project-reference "~/elsewhere/"))))
+
 (provide 'diff-hl-test)
 
 ;;; diff-hl-test.el ends here
