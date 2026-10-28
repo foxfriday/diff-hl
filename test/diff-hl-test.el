@@ -50,11 +50,7 @@
     (erase-buffer)
     (insert diff-hl-test-initial-content)
     (save-buffer)
-    (pcase (vc-backend (diff-hl--buffer-file-name))
-      (`Git
-       (vc-git-command nil 0 (diff-hl--buffer-file-name) "reset"))
-      (`Hg
-       (vc-hg-command nil 0 (diff-hl--buffer-file-name) "revert")))))
+    (vc-git-command nil 0 (diff-hl--buffer-file-name) "reset")))
 
 (defun diff-hl-test-compute-diff-lines ()
   (diff-hl-test-in-source
@@ -137,7 +133,6 @@
     (should-error (diff-hl-next-hunk) :type 'user-error)))
 
 (diff-hl-deftest diff-hl-indirect-buffer-move-async ()
-  (skip-unless (>= emacs-major-version 27)) ;No `main-thread'.
   (diff-hl-test-in-source
    (let ((diff-hl-update-async t))
      (narrow-to-region (point-min) (point-max))
@@ -213,7 +208,7 @@
     (save-buffer)
     (let ((file (diff-hl--buffer-file-name))
           (dest-buffer (get-buffer-create " *diff-hl-test*")))
-      (diff-hl-diff-buffer-with-reference file dest-buffer nil 3)
+      (diff-hl-diff-buffer-with-reference file dest-buffer 3)
       (with-current-buffer dest-buffer
         (with-no-warnings
           (let (diff-auto-refine-mode)
@@ -229,21 +224,6 @@
 
 Diff finished."
                  (buffer-substring (point) (point-max))))))))
-
-(diff-hl-deftest diff-hl-resolved-revision-with-hg ()
-  (diff-hl-test-in-source
-    (setq-local diff-hl-reference-revision "test-rev")
-    (let ((vc-hg-program "chg"))
-      (condition-case err
-          (progn
-            (diff-hl-resolved-revision 'Hg "test-rev")
-            (ert-fail "Expected an error to be signaled but none was."))
-        ;; We don't have a hg repo, but we can use the error message to verify the
-        ;; underlying command.
-        (error
-         (should (string-match-p
-                  "chg .*identify -r test-rev -i"
-                  (error-message-string err))))))))
 
 (provide 'diff-hl-test)
 

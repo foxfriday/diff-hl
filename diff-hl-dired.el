@@ -66,15 +66,6 @@
   "Non-nil to indicate ignored files."
   :type 'boolean)
 
-(defcustom diff-hl-dired-ignored-backends '(RCS)
-  "VC backends to ignore.
-The directories registered to one of these backends won't have
-status indicators."
-  :type `(repeat (choice ,@(mapcar
-                            (lambda (name)
-                              `(const :tag ,(symbol-name name) ,name))
-                            vc-handled-backends))))
-
 (defcustom diff-hl-dired-fringe-bmp-function 'diff-hl-fringe-bmp-from-type
   "Function to determine fringe bitmap from change type and position."
   :type 'function)
@@ -93,11 +84,10 @@ status indicators."
 
 (defun diff-hl-dired-update ()
   "Highlight the Dired buffer."
-  (let ((backend (ignore-errors (vc-responsible-backend default-directory)))
-        (def-dir default-directory)
+  (let ((def-dir default-directory)
         (buffer (current-buffer))
         dirs-alist files-alist)
-    (when (and backend (not (memq backend diff-hl-dired-ignored-backends)))
+    (when (eq (ignore-errors (vc-responsible-backend default-directory)) 'Git)
       (if (buffer-live-p diff-hl-dired-process-buffer)
           (let ((proc (get-buffer-process diff-hl-dired-process-buffer)))
             (when proc (kill-process proc)))
@@ -110,7 +100,7 @@ status indicators."
         (setq-local vc-dir-process-output-limit nil)
         (erase-buffer)
         (diff-hl-dired-status-files
-         backend def-dir
+         def-dir
          (when diff-hl-dired-extra-indicators
            (with-current-buffer buffer
              (diff-hl-dired-nondirectory-files)))
@@ -143,19 +133,16 @@ status indicators."
                (kill-buffer diff-hl-dired-process-buffer))))
          )))))
 
-(defun diff-hl-dired-status-files (backend dir files update-function)
-  "Using VC BACKEND, fetch list of (FILE STATE EXTRA) entries for DIR.
+(defun diff-hl-dired-status-files (dir files update-function)
+  "Using Git, fetch list of (FILE STATE EXTRA) entries for DIR.
 Call UPDATE-FUNCTION as entries are added."
-  (vc-call-backend
-   backend 'dir-status-files
+  (vc-git-dir-status-files
    dir nil
    (lambda (entries &optional more-to-come)
      (if (or more-to-come
              (not diff-hl-dired-extra-indicators))
          (funcall update-function entries more-to-come)
        (diff-hl-dir-status-ignored-files
-        backend
-        dir
         files
         (lambda (ignored-entries &optional more-to-come)
           (funcall update-function ignored-entries t)
@@ -179,38 +166,15 @@ Call UPDATE-FUNCTION as entries are added."
        res))
    dired-subdir-alist))
 
+(declare-function vc-git-dir-status-files "vc-git")
 (declare-function vc-git-dir-status-goto-stage "vc-git")
 (declare-function make-vc-git-dir-status-state "vc-git")
-(declare-function vc-hg-command "vc-hg")
-(declare-function vc-hg--program-version "vc-hg")
-(declare-function vc-hg-after-dir-status "vc-hg")
 
-(defun diff-hl-dir-status-ignored-files (backend dir files update-function)
-  (cond
-   ((eq backend 'Git)
-    (vc-git-dir-status-goto-stage
-     (make-vc-git-dir-status-state :stage 'ls-files-ignored
-                                   :files files
-                                   :update-function update-function)))
-   ((eq backend 'Hg)
-    (let ((default-directory dir))
-      (erase-buffer)
-      (apply #'vc-hg-command (current-buffer) 'async files
-             "status" "-i"
-             (if (version<= "4.2" (vc-hg--program-version))
-                 '("--config" "commands.status.relative=1")
-               '("re:" "-I" "."))))
-    (static-if (fboundp 'vc-run-delayed-success)
-        (vc-run-delayed-success 0
-          (vc-hg-after-dir-status update-function))
-      (vc-run-delayed
-        (vc-hg-after-dir-status update-function))))
-   ;; No specialized solution for "list only ignored state", list all.
-   ;; If the backend doesn't use several process calls (like Git), the
-   ;; difference should be trivial.
-   (t
-    (vc-call-backend backend 'dir-status-files dir files
-                     update-function))))
+(defun diff-hl-dir-status-ignored-files (files update-function)
+  (vc-git-dir-status-goto-stage
+   (make-vc-git-dir-status-state :stage 'ls-files-ignored
+                                 :files files
+                                 :update-function update-function)))
 
 (defun diff-hl-dired-highlight-items (alist)
   "Highlight ALIST containing (FILE . TYPE) elements."

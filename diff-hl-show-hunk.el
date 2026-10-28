@@ -1,4 +1,4 @@
-;;; diff-hl-show-hunk.el --- Integrate popup/posframe and diff-hl-diff-goto-hunk -*- lexical-binding: t -*-
+;;; diff-hl-show-hunk.el --- Integrate popup and diff-hl-diff-goto-hunk -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2020-2025  Free Software Foundation, Inc.
 
@@ -21,54 +21,27 @@
 
 ;;; Commentary:
 
-;; `diff-hl-show-hunk' shows a popup with the modification hunk at point.
-;; `diff-hl-show-hunk-function' points to the backend used to show the hunk.
-;; Its default value is `diff-hl-show-hunk-inline', that shows diffs inline
-;; using overlay.  There is another built-in backend:
-;; `diff-hl-show-hunk-posframe' (based on posframe).
-;;
-;; `diff-hl-show-hunk-mouse-mode' adds interaction on clicking in the
-;; margin or the fringe (shows the current hunk as well).
-;;
-;; To use it in all buffers:
-;;
-;;   (global-diff-hl-show-hunk-mouse-mode)
+;; `diff-hl-show-hunk' shows the modification hunk at point inline,
+;; using `diff-hl-show-hunk-inline'.
 
 ;;; Code:
 
 (require 'diff-hl)
 
 (defgroup diff-hl-show-hunk nil
-  "Show vc diffs in a posframe or popup."
+  "Show vc diffs in a popup."
   :group 'diff-hl)
 
 (defcustom diff-hl-show-hunk-ignorable-commands
   '(ignore
     diff-hl-show-hunk
-    handle-switch-frame
-    diff-hl-show-hunk--click)
+    handle-switch-frame)
   "Commands that will keep the hunk shown.
 Any command not on this list will cause the hunk to be hidden."
   :type '(repeat function)
   :group 'diff-hl-show-hunk)
 
-(defcustom diff-hl-show-hunk-function 'diff-hl-show-hunk-inline
-  "The function used to render the hunk.
-The function receives as first parameter a buffer with the
-contents of the hunk, and as second parameter the line number
-corresponding to the clicked line in the original buffer."
-  :type '(choice
-          (const :tag "Show inline" diff-hl-show-hunk-inline)
-          (const :tag "Show using posframe" diff-hl-show-hunk-posframe)))
-
-(defvar diff-hl-show-hunk-mouse-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "<left-margin> <mouse-1>") 'diff-hl-show-hunk--click)
-    (define-key map (kbd "<right-margin> <mouse-1>") 'diff-hl-show-hunk--click)
-    (define-key map (kbd "<left-fringe> <mouse-1>") 'diff-hl-show-hunk--click)
-    (define-key map (kbd "<right-fringe> <mouse-1>") 'diff-hl-show-hunk--click)
-    map)
-  "Keymap for command `diff-hl-show-hunk-mouse-mode'.")
+(declare-function diff-hl-show-hunk-inline "diff-hl-show-hunk-inline")
 
 (defvar diff-hl-show-hunk-buffer-name "*diff-hl-show-hunk-buffer*"
   "Name of the buffer used by diff-hl-show-hunk.")
@@ -137,8 +110,7 @@ buffer."
       (let ((file (diff-hl--buffer-file-name)))
         (if (buffer-modified-p)
             (diff-hl-diff-buffer-with-reference file dest-buffer)
-          (diff-hl-changes-buffer file (vc-backend file)
-                                  nil dest-buffer)))
+          (diff-hl-changes-buffer file nil dest-buffer)))
       (switch-to-buffer dest-buffer)
       (diff-hl-diff-skip-to line)
       (setq vc-sentinel-movepoint (point)))
@@ -159,7 +131,7 @@ buffer."
 (defun diff-hl-show-hunk-buffer ()
   "Create the buffer with the contents of the hunk at point.
 The buffer has the point in the corresponding line of the hunk.
-Returns a list with the buffer and the line number of the clicked line."
+Returns a list with the buffer and the line number of the current line."
   (let ((content)
         (point-in-buffer)
         (line)
@@ -180,7 +152,7 @@ Returns a list with the buffer and the line number of the clicked line."
       (erase-buffer)
       (insert content)
 
-      ;; Highlight the clicked line
+      ;; Highlight the current line
       (goto-char point-in-buffer)
       (setq line-overlay (make-overlay (line-beginning-position)
                                        (min (point-max)
@@ -202,18 +174,11 @@ Returns a list with the buffer and the line number of the clicked line."
       (let ((content (buffer-string)))
         (diff-hl-show-hunk--fill-original-content content))
 
-      ;; Come back to the clicked line
+      ;; Come back to the current line
       (goto-char (overlay-start line-overlay))
       (setq line (line-number-at-pos)))
 
     (list buffer line)))
-
-(defun diff-hl-show-hunk--click (event)
-  "Called when user clicks on margins.  EVENT is click information."
-  (interactive "e")
-  ;; Go the click's position.
-  (posn-set-point (event-start event))
-  (diff-hl-show-hunk))
 
 (defvar diff-hl-show-hunk-map
   (let ((map (make-sparse-keymap)))
@@ -277,7 +242,7 @@ of `diff-hl-show-hunk'."
 
 (defun diff-hl-show-hunk--goto-hunk-overlay (overlay)
   "Tries to display the whole overlay, and place the point at the
-end of the OVERLAY, so posframe/inline is placed below the hunk."
+end of the OVERLAY, so the inline popup is placed below the hunk."
   (when (and (overlayp overlay) (overlay-buffer overlay))
     (let ((pt (point)))
       (goto-char (overlay-start overlay))
@@ -307,12 +272,11 @@ end of the OVERLAY, so posframe/inline is placed below the hunk."
 
 ;;;###autoload
 (defun diff-hl-show-hunk ()
-  "Show the VC diff hunk at point.
-The backend is determined by `diff-hl-show-hunk-function'."
+  "Show the VC diff hunk at point."
   (interactive)
 
-  (unless (vc-backend (diff-hl--buffer-file-name))
-    (user-error "The buffer is not under version control"))
+  (unless (eq (vc-backend (diff-hl--buffer-file-name)) 'Git)
+    (user-error "The buffer is not under Git control"))
 
   (diff-hl-find-current-hunk)
 
@@ -330,36 +294,10 @@ The backend is determined by `diff-hl-show-hunk-function'."
     (unless overlay
       (user-error "Not in a hunk")))
 
-  (cond
-   ((not diff-hl-show-hunk-function)
-    (message "Please configure `diff-hl-show-hunk-function'")
-    (diff-hl-diff-goto-hunk))
-   ((let ((buffer-and-line (diff-hl-show-hunk-buffer)))
-      (setq diff-hl-show-hunk--original-buffer (current-buffer))
-      (setq diff-hl-show-hunk--original-window (selected-window))
-      (apply diff-hl-show-hunk-function buffer-and-line))
-    ;; We could fall back to `diff-hl-diff-goto-hunk', but the
-    ;; current default should work in all environments (both GUI
-    ;; and terminal), and if something goes wrong we better show
-    ;; the error to the user.
-    )))
-
-;;;###autoload
-(define-minor-mode diff-hl-show-hunk-mouse-mode
-  "Enable margin and fringe to show a posframe/popup with vc diffs when clicked.
-By default, the popup shows only the current hunk, and
-the line of the hunk that matches the current position is
-highlighted.  The face, border and other visual preferences are
-customizable.  It can be also invoked with the command
-`diff-hl-show-hunk'
-\\{diff-hl-show-hunk-mouse-mode-map}"
-  :group 'diff-hl-show-hunk
-  :lighter "")
-
-;;;###autoload
-(define-globalized-minor-mode global-diff-hl-show-hunk-mouse-mode
-  diff-hl-show-hunk-mouse-mode
-  diff-hl-show-hunk-mouse-mode)
+  (let ((buffer-and-line (diff-hl-show-hunk-buffer)))
+    (setq diff-hl-show-hunk--original-buffer (current-buffer))
+    (setq diff-hl-show-hunk--original-window (selected-window))
+    (apply #'diff-hl-show-hunk-inline buffer-and-line)))
 
 (provide 'diff-hl-show-hunk)
 ;;; diff-hl-show-hunk.el ends here

@@ -27,18 +27,6 @@
 (require 'subr-x)
 (require 'diff-hl-show-hunk)
 
-(define-obsolete-variable-alias 'diff-hl-inline-popup--current-lines 'diff-hl-show-hunk-inline--current-lines "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--current-index 'diff-hl-show-hunk-inline--current-index "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--invoking-command 'diff-hl-show-hunk-inline--invoking-command "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--current-footer 'diff-hl-show-hunk-inline--current-footer "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--current-header 'diff-hl-show-hunk-inline--current-header "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--height 'diff-hl-show-hunk-inline--height "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--current-custom-keymap 'diff-hl-show-hunk-inline--current-custom-keymap "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup--close-hook 'diff-hl-show-hunk-inline--close-hook "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-show-hunk-inline-popup-hide-hunk 'diff-hl-show-hunk-inline-hide-hunk "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-show-hunk-inline-popup-smart-lines 'diff-hl-show-hunk-inline-smart-lines "0.11.0")
-(define-obsolete-variable-alias 'diff-hl-inline-popup-transient-mode-map 'diff-hl-show-hunk-inline-transient-mode-map "0.11.0")
-
 (defvar diff-hl-show-hunk-inline--current-popup nil "The overlay of the current inline popup.")
 (defvar diff-hl-show-hunk-inline--current-lines nil "A list of the lines to show in the popup.")
 (defvar diff-hl-show-hunk-inline--current-index nil "First line showed in popup.")
@@ -114,7 +102,7 @@ Compute it from LINES starting at INDEX with a WINDOW-SIZE."
 
 (defun diff-hl-show-hunk-inline--underline-face ()
   "Return the face used for inline popup underlines."
-  `(:underline ,(if (>= emacs-major-version 29) '(:position t) t)))
+  '(:underline (:position t)))
 
 (defun diff-hl-show-hunk-inline--compute-header (width &optional header)
   "Compute the header of the popup.
@@ -235,11 +223,6 @@ FOOTER are showed at start and end."
     (define-key map (kbd "C-g") #'diff-hl-show-hunk-inline-hide)
     (define-key map [escape] #'diff-hl-show-hunk-inline-hide)
     (define-key map (kbd "q") #'diff-hl-show-hunk-inline-hide)
-    ;;http://ergoemacs.org/emacs/emacs_mouse_wheel_config.html
-    (define-key map (kbd "<mouse-4>") #'diff-hl-show-hunk-inline--popup-up)
-    (define-key map (kbd "<wheel-up>") #'diff-hl-show-hunk-inline--popup-up)
-    (define-key map (kbd "<mouse-5>") #'diff-hl-show-hunk-inline--popup-down)
-    (define-key map (kbd "<wheel-down>") #'diff-hl-show-hunk-inline--popup-down)
     map)
   "Keymap for command `diff-hl-show-hunk-inline-transient-mode'.
 Capture all the vertical movement of the point, and converts it
@@ -320,17 +303,6 @@ is closed."
     (diff-hl-show-hunk-inline-scroll-to 0)
     overlay))
 
-(defun diff-hl-show-hunk-inline--hide-all ()
-  "Testing purposes, use in case some inline popups get stuck in a buffer."
-  (interactive)
-  (when diff-hl-show-hunk-inline-transient-mode
-    (diff-hl-show-hunk-inline-transient-mode -1))
-  (setq diff-hl-show-hunk-inline--current-popup nil)
-  (let* ((all-overlays (overlays-in (point-min) (point-max)))
-         (overlays (cl-remove-if-not (lambda (o)(overlay-get o 'diff-hl-show-hunk-inline)) all-overlays)))
-    (dolist (o overlays)
-      (delete-overlay o))))
-
 ;;;###autoload
 (defun diff-hl-show-hunk-inline (buffer &optional _ignored-line)
   "Implementation to show the hunk in a inline popup.
@@ -392,31 +364,6 @@ BUFFER is a buffer with the hunk."
          point
          height))
       )))
-
-(define-obsolete-function-alias 'diff-hl-inline-popup--splice 'diff-hl-show-hunk-inline--splice "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--ensure-enough-lines 'diff-hl-show-hunk-inline--ensure-enough-lines "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--compute-content-height 'diff-hl-show-hunk-inline--compute-content-height "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--compute-content-lines 'diff-hl-show-hunk-inline--compute-content-lines "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--compute-header 'diff-hl-show-hunk-inline--compute-header "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--compute-footer 'diff-hl-show-hunk-inline--compute-footer "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--separator 'diff-hl-show-hunk-inline--separator "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--available-width 'diff-hl-show-hunk-inline--available-width "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--compute-popup-str 'diff-hl-show-hunk-inline--compute-popup-str "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup-scroll-to 'diff-hl-show-hunk-inline-scroll-to "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--popup-down 'diff-hl-show-hunk-inline--popup-down "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--popup-up 'diff-hl-show-hunk-inline--popup-up "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--popup-pagedown 'diff-hl-show-hunk-inline--popup-pagedown "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--popup-pageup 'diff-hl-show-hunk-inline--popup-pageup "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--ignorable-command-p 'diff-hl-show-hunk-inline--ignorable-command-p "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--post-command-hook 'diff-hl-show-hunk-inline--post-command-hook "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup-transient-mode 'diff-hl-show-hunk-inline-transient-mode "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup-hide 'diff-hl-show-hunk-inline-hide "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup-show 'diff-hl-show-hunk-inline-show "0.11.0")
-(define-obsolete-function-alias 'diff-hl-inline-popup--hide-all 'diff-hl-show-hunk-inline--hide-all "0.11.0")
-
-(define-obsolete-function-alias 'diff-hl-show-hunk-inline-popup 'diff-hl-show-hunk-inline "0.11.0")
-
-(provide 'diff-hl-inline-popup)
 
 (provide 'diff-hl-show-hunk-inline)
 ;;; diff-hl-show-hunk-inline ends here

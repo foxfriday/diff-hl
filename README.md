@@ -1,4 +1,4 @@
-About [![Build Status](https://github.com/dgutov/diff-hl/actions/workflows/ci.yml/badge.svg)](https://github.com/dgutov/diff-hl/actions/workflows/ci.yml)
+About
 =====
 
 `diff-hl-mode` highlights uncommitted changes on the side of the window, allows
@@ -6,12 +6,12 @@ you to jump between and revert them selectively.
 
 This feature is also known as "source control gutter indicators".
 
-In buffers controlled by Git, you can stage and unstage the changes.
+You can also stage and unstage the changes.
 
 For the usage instructions and the list of commands, see the Commentary section
 inside the file.
 
-Tested with Git, Mercurial, Bazaar and SVN. May work with other VC backends, too.
+Only Git is supported; files under other VC backends are ignored.
 
 The package also contains auxiliary modes:
 
@@ -21,13 +21,10 @@ The package also contains auxiliary modes:
 * But if you use a non-graphical terminal, the package will fall back to using
   the margins anyway, as long as `diff-hl-fallback-to-margin` is non-nil and the
   margin width is non-zero.
-* `diff-hl-amend-mode` sets the reference revision to the one before
-  recent one. Also, you could use `diff-hl-set-reference-rev` to set
-  it to any revision, see its docstring for details.
+* `diff-hl-set-reference-rev` sets the reference revision to any
+  revision, see its docstring for details.
 * `diff-hl-flydiff-mode` implements highlighting changes on the fly.
-* `diff-hl-show-hunk-mouse-mode` makes fringe and margin react to
-  mouse clicks to show the corresponding hunk. That's the alternative
-  to using `diff-hl-show-hunk` and friends.
+* `diff-hl-show-hunk` shows the hunk at point inline.
 
 Usage
 =====
@@ -38,35 +35,16 @@ Put this into your init script:
 (global-diff-hl-mode)
 ```
 
-You must also ensure that VC is enabled (e.g. `vc-handled-backends` is
-not nil).
+You must also ensure that VC is enabled (e.g. `vc-handled-backends`
+includes `Git`).
 
 Check out the Commentary section in each file for more detailed usage
 instructions.
 
-Screenshots
-=====
-
-diff-hl-mode
------
-Top window: a buffer in this minor mode, bottom window: the corresponding diff.
-
-![screenie](screenshot.png)
-
-diff-hl-dired-mode
------
-
-![screenie](screenshot-dired.png)
-
-diff-hl-margin-mode
------
-
-![screenie](screenshot-margin.png)
-
 Requirements
 =====
 
-Emacs 27.1+.
+Emacs 30.1+.
 
 Notes
 =====
@@ -108,25 +86,6 @@ If you're using some package other than `vc` to commit changes, it might
 not run `vc-checkin-hook` after commits. In that case, you'll need to
 either add `diff-hl-update` to the hook it does run, or advise some
 function that's called in the buffer after its state has changed.
-
-psvn
------
-
-```lisp
-(advice-add 'svn-status-update-modeline :after #'diff-hl-update)
-```
-
-Magit
------
-
-If you're using a version before 2.4.0, it defines `magit-revert-buffer-hook`
-(or `magit-not-reverted-hook`), which we use.
-
-When using Magit 2.4 or newer, add this to your init script:
-
-```lisp
-(add-hook 'magit-post-refresh-hook 'diff-hl-magit-post-refresh)
-```
 
 Tramp
 -----
