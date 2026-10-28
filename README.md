@@ -21,8 +21,8 @@ The package also contains auxiliary modes:
 * But if you use a non-graphical terminal, the package will fall back to using
   the margins anyway, as long as `diff-hl-fallback-to-margin` is non-nil and the
   margin width is non-zero.
-* `diff-hl-set-reference-rev` sets the reference revision to any
-  revision, see its docstring for details.
+* `diff-hl-set-reference-rev` sets the reference revision for the
+  current project to any revision, see its docstring for details.
 * `diff-hl-flydiff-mode` implements highlighting changes on the fly.
 * `diff-hl-show-hunk` shows the hunk at point inline.
 

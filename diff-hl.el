@@ -1552,163 +1552,76 @@ CONTEXT-LINES is the size of the unified diff context, defaults to 0."
     (turn-on-diff-hl-mode)))
 
 (declare-function vc-annotate-extract-revision-at-line "vc-annotate")
+(declare-function project-name "project")
+(declare-function project-buffers "project")
 
 ;;;###autoload
 (defun diff-hl-set-reference-rev (rev)
-  "Set the reference revision globally to REV.
-When called interactively, REV read with completion.
+  "Set the reference revision in the current project to REV.
+Files opened later in the same project use it as well.
 
-When called with a prefix argument, reset the global reference to the most
-recent one instead.  With two prefix arguments, do the same and discard
-every per-project reference created by
-`diff-hl-set-reference-rev-in-project`.
+When called interactively, REV is read with completion.  With a prefix
+argument, reset the reference to the most recent revision instead, like
+`diff-hl-reset-reference-rev'.
 
-The default value chosen using one of methods below:
+The default value is chosen using one of the methods below:
 
 - In a log view buffer, it uses the revision of current entry.
 Call `vc-print-log' or `vc-print-root-log' first to open a log
 view buffer.
 - In a VC annotate buffer, it uses the revision of current line.
-- In other situations, it uses the symbol at point.
-
-Notice that this sets the reference revision globally, so in files from
-other repositories, `diff-hl-mode' will not highlight changes correctly,
-until you run `diff-hl-reset-reference-rev'.  To set the reference on a
-per-project basis, see `diff-hl-set-reference-rev-in-project`."
+- In other situations, it uses the symbol at point."
   (interactive
-   (if current-prefix-arg current-prefix-arg
-     (let* ((def (or (and (equal major-mode 'vc-annotate-mode)
-                          (car (vc-annotate-extract-revision-at-line)))
-                     (log-view-current-tag)
-                     (thing-at-point 'symbol t)))
-            (prompt (if def
-                        (format "Reference revision (default %s): " def)
-                      "Reference revision: ")))
-       (list (vc-read-revision prompt nil nil def)))))
-  (unless rev
-    (user-error "No reference revision specified"))
-  (cond
-   ((equal '(4) current-prefix-arg)
-    ;; reset global value
-    (diff-hl-reset-reference-rev))
-   ((equal '(16) current-prefix-arg)
-    ;; reset global value and remove per-project value
-    (diff-hl-reset-reference-rev '(4)))
-   ;; change only global value
-   (t (setq-default diff-hl-reference-revision rev)
-      (unless current-prefix-arg
-        (message "Set global reference revision to %s" rev))
-      (dolist (buf (buffer-list))
-        (with-current-buffer buf
-          (when diff-hl-mode
-            (when (not (local-variable-p 'diff-hl-reference-revision))
-              (diff-hl-update))))))))
+   (list
+    (unless current-prefix-arg
+      (let* ((def (or (and (equal major-mode 'vc-annotate-mode)
+                           (car (vc-annotate-extract-revision-at-line)))
+                      (log-view-current-tag)
+                      (thing-at-point 'symbol t)))
+             (prompt (if def
+                         (format "Reference revision (default %s): " def)
+                       "Reference revision: ")))
+        (vc-read-revision prompt nil nil def)))))
+  (if (not rev)
+      (diff-hl-reset-reference-rev)
+    (let ((proj (diff-hl--current-project)))
+      (diff-hl--set-project-reference proj rev)
+      (message "Showing changes against %s (project %s)"
+               rev (project-name proj)))))
 
 ;;;###autoload
-(defun diff-hl-set-reference-rev-in-project (rev)
-  "Set the reference revision in the current project to REV.
-When called interactively, REV read with completion.
+(defun diff-hl-reset-reference-rev ()
+  "Reset the reference revision in the current project to the most recent one."
+  (interactive)
+  (let ((proj (diff-hl--current-project)))
+    (diff-hl--set-project-reference proj nil)
+    (message "Showing changes against the most recent revision (project %s)"
+             (project-name proj))))
 
-When called with a prefix argument, reset to the global value instead.
-
-The default value chosen using one of methods below:
-
-- In a log view buffer, it uses the revision of current entry.
-Call `vc-print-log' or `vc-print-root-log' first to open a log
-view buffer.
-- In a VC annotate buffer, it uses the revision of current line.
-- In other situations, it uses the symbol at point.
-
-Projects whose reference was set with this command are unaffected by
-subsequent changes to the global reference (see
-`diff-hl-set-reference-rev`)."
-  (interactive
-   (if current-prefix-arg current-prefix-arg
-     (let* ((def (or (and (equal major-mode 'vc-annotate-mode)
-                          (car (vc-annotate-extract-revision-at-line)))
-                     (log-view-current-tag)
-                     (thing-at-point 'symbol t)))
-            (prompt (if def
-                        (format "Reference revision (default %s): " def)
-                      "Reference revision: ")))
-       (list (vc-read-revision prompt nil nil def)))))
-  (unless rev
-    (user-error "No reference revision specified"))
-  (let* ((proj (project-current))
-         (name (project-name proj)))
-    (cond
-     ;; reset
-     (current-prefix-arg
-      (diff-hl-reset-reference-rev-in-project proj))
-     ;; set
-     (t
-      (diff-hl-set-reference-rev-in-project-internal rev proj)
-      (message "Showing changes against %s (project %s)" rev name)))))
+(defun diff-hl--current-project ()
+  (or (project-current)
+      (user-error "Not in a project")))
 
 (defun diff-hl--project-root (proj)
   (expand-file-name (project-root proj)))
 
-;; Commands below will only work with recent enough project.el.
-(declare-function project-name "project")
-(declare-function project-buffers "project")
-
-(defun diff-hl-set-reference-rev-in-project-internal (rev proj)
-  (let* ((root (diff-hl--project-root proj)))
-    ;; newly opened files will share this value
-    (setf (alist-get root diff-hl-reference-revision-projects-cache
-                     nil nil #'string-equal)
-          rev)
-    ;; update currently open files
-    (dolist (buf (project-buffers proj))
-      (with-current-buffer buf
-        (when diff-hl-mode
-          (setq-local diff-hl-reference-revision rev)
-          (diff-hl-update))))))
-
-;;;###autoload
-(defun diff-hl-reset-reference-rev (&optional arg)
-  "Reset the reference revision globally to the most recent one.
-
-When called with a prefix argument, do the same and discard every
-per-project reference created by `diff-hl-set-reference-rev-in-project'."
-  (interactive "P")
-  (setq-default diff-hl-reference-revision nil)
-  (when arg
-    ;; reset all cache
-    (setq diff-hl-reference-revision-projects-cache nil))
-  (dolist (buf (buffer-list))
-    (with-current-buffer buf
-      (when diff-hl-mode
-        (when arg
-          ;; reset value in buffers
-          (kill-local-variable 'diff-hl-reference-revision))
-        ;; Don't touch buffers with the local reference (set by
-        ;; `diff-hl-set-reference-rev-in-project' ), when called without a
-        ;; prefix.
-        (unless (local-variable-p 'diff-hl-reference-revision)
-          (diff-hl-update)))))
-  (message "Reference revision reset globally to the most recent revision"))
-
-(defun diff-hl-reset-reference-rev-in-project (&optional proj)
-  "Reset the reference revision in the project PROJ to the
-global value.
-
-PROJ defaults to the current project."
-  (interactive)
-  (when-let* ((proj (or proj (project-current))))
-    ;; reset cache for the project
+(defun diff-hl--set-project-reference (proj rev)
+  "Use REV as the reference revision in the project PROJ.
+nil means the most recent revision."
+  (let ((root (diff-hl--project-root proj)))
+    ;; Remembered for files opened later, see `diff-hl-mode'.
     (setq diff-hl-reference-revision-projects-cache
-          (assoc-delete-all (diff-hl--project-root proj)
-                            diff-hl-reference-revision-projects-cache
+          (assoc-delete-all root diff-hl-reference-revision-projects-cache
                             #'string-equal))
-    ;; reset value in project buffers
+    (when rev
+      (push (cons root rev) diff-hl-reference-revision-projects-cache))
     (dolist (buf (project-buffers proj))
       (with-current-buffer buf
         (when diff-hl-mode
-          (kill-local-variable 'diff-hl-reference-revision)
-          (diff-hl-update))))
-    (message "Reference revision reset to the global value (project %s)"
-             (project-name proj))))
+          (if rev
+              (setq-local diff-hl-reference-revision rev)
+            (kill-local-variable 'diff-hl-reference-revision))
+          (diff-hl-update))))))
 
 ;;;###autoload
 (define-globalized-minor-mode global-diff-hl-mode diff-hl-mode
