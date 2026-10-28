@@ -1,8 +1,9 @@
 About
 =====
 
-`diff-hl-mode` highlights uncommitted changes on the side of the window, allows
-you to jump between and revert them selectively.
+`diff-hl-mode` highlights uncommitted changes in the margin of the window
+(`+` added, `-` deleted, `~` changed), allows you to jump between and revert
+them selectively.  It works the same in graphical frames and in terminals.
 
 This feature is also known as "source control gutter indicators".
 
@@ -16,11 +17,6 @@ Only Git is supported; files under other VC backends are ignored.
 The package also contains auxiliary modes:
 
 * `diff-hl-dired-mode` provides similar functionality in Dired.
-* `diff-hl-margin-mode` changes the highlighting function to
-  use the margin instead of the fringe.
-* But if you use a non-graphical terminal, the package will fall back to using
-  the margins anyway, as long as `diff-hl-fallback-to-margin` is non-nil and the
-  margin width is non-zero.
 * `diff-hl-set-reference-rev` sets the reference revision for the
   current project to any revision, see its docstring for details.
 * `diff-hl-flydiff-mode` implements highlighting changes on the fly.
@@ -63,21 +59,13 @@ Notes
   not support alternative algorithms, because it uses the external
   `diff` program.
 
-* We conflict with other modes when they put indicators on the fringe,
-  such as [Flycheck](https://github.com/flycheck/flycheck). This is
-  rarely a significant problem, since if you're using such a mode,
-  you'd usually want to fix all errors and warnings before continuing,
-  and then the conflicting indicators go away.
-
-* There's no fringe when Emacs is running in the console, but the navigation
-  and revert commands still work. Consider turning `diff-hl-margin-mode` on,
-  to show the indicators in the margin instead. It also helps avoid the conflict
-  with Flycheck/Flymake even on graphical frames.
-
-* Frame-local and buffer-local values of `line-spacing` are not supported.
-
-* Fringe width up to 16 works best (because we can't define a bitmap
-  with width above that number).
+* The indicators use the right margin, which is widened to one column
+  while `diff-hl-mode` is on.  Customize `diff-hl-side` to `left` to use
+  the left margin instead.  The characters are set by
+  `diff-hl-margin-symbols-alist` and colored by the `diff-hl-insert`,
+  `diff-hl-delete` and `diff-hl-change` faces.  Changes against a
+  reference revision use the same characters in the dimmed
+  `diff-hl-reference-*` faces.
 
 Integration
 =====

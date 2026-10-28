@@ -39,7 +39,7 @@
 (defvar vc-dir-process-output-limit)
 
 (defgroup diff-hl-dired nil
-  "VC diff highlighting on the side of a Dired window."
+  "VC diff highlighting in the margin of a Dired window."
   :group 'diff-hl)
 
 (defface diff-hl-dired-insert
@@ -66,21 +66,18 @@
   "Non-nil to indicate ignored files."
   :type 'boolean)
 
-(defcustom diff-hl-dired-fringe-bmp-function 'diff-hl-fringe-bmp-from-type
-  "Function to determine fringe bitmap from change type and position."
-  :type 'function)
-
 ;;;###autoload
 (define-minor-mode diff-hl-dired-mode
-  "Toggle VC diff highlighting on the side of a Dired window."
+  "Toggle VC diff highlighting in the margin of a Dired window."
   :lighter ""
   (if diff-hl-dired-mode
       (progn
-        (diff-hl-maybe-define-bitmaps)
+        (diff-hl--ensure-margin)
         (set (make-local-variable 'diff-hl-dired-process-buffer) nil)
         (add-hook 'dired-after-readin-hook 'diff-hl-dired-update 10 t))
     (remove-hook 'dired-after-readin-hook 'diff-hl-dired-update t)
-    (diff-hl-dired-clear)))
+    (diff-hl-dired-clear)
+    (diff-hl--restore-margin)))
 
 (defun diff-hl-dired-update ()
   "Highlight the Dired buffer."
@@ -186,15 +183,10 @@ Call UPDATE-FUNCTION as entries are added."
         (goto-char (point-min))
         (when (and type (dired-goto-file-1
                          (file-name-nondirectory file) (expand-file-name file) nil))
-          (let* ((diff-hl-fringe-bmp-function diff-hl-dired-fringe-bmp-function)
-                 (diff-hl-fringe-face-function 'diff-hl-dired-face-from-type)
-                 (o (diff-hl-add-highlighting type 'single)))
+          (let ((o (diff-hl-add-highlighting
+                    type (intern (format "diff-hl-dired-%s" type)))))
             (overlay-put o 'modification-hooks '(diff-hl-overlay-modified))
-            (overlay-put o 'diff-hl-dired-type type)
-            ))))))
-
-(defun diff-hl-dired-face-from-type (type _pos)
-  (intern (format "diff-hl-dired-%s" type)))
+            (overlay-put o 'diff-hl-dired-type type)))))))
 
 (defalias 'diff-hl-dired-clear 'diff-hl-remove-overlays)
 

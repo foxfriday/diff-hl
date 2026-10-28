@@ -25,9 +25,9 @@
 
 ;;; Commentary:
 
-;; `diff-hl-mode' highlights uncommitted changes on the side of the
-;; window (using the fringe, by default), allows you to jump between
-;; the hunks and revert them selectively.
+;; `diff-hl-mode' highlights uncommitted changes in the margin of the
+;; window, allows you to jump between the hunks and revert them
+;; selectively.
 
 ;; Provided commands:
 ;;
@@ -56,7 +56,6 @@
 
 ;;; Code:
 
-(require 'fringe)
 (require 'diff-mode)
 (require 'vc)
 (require 'vc-dir)
@@ -65,7 +64,6 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'vc-git)
-  (require 'face-remap)
   (require 'project))
 
 (defgroup diff-hl nil
@@ -73,38 +71,35 @@
   :group 'vc)
 
 (defface diff-hl-insert
-  '((default :inherit diff-added)
-    (((class color)) :foreground "green4"))
+  '((((background dark)) :foreground "green3")
+    (t :foreground "green4"))
   "Face used to highlight inserted lines."
   :group 'diff-hl)
 
 (defface diff-hl-delete
-  '((default :inherit diff-removed)
-    (((class color)) :foreground "red3"))
+  '((((background dark)) :foreground "red2")
+    (t :foreground "red3"))
   "Face used to highlight deleted lines."
   :group 'diff-hl)
 
 (defface diff-hl-change
-  '((default :foreground "blue3")
-    (((class color) (min-colors 88) (background light))
-     :background "#ddddff")
-    (((class color) (min-colors 88) (background dark))
-     :background "#333355"))
+  '((((background dark)) :foreground "DodgerBlue1")
+    (t :foreground "blue3"))
   "Face used to highlight changed lines."
   :group 'diff-hl)
 
 (defface diff-hl-reference-insert
-  '((default :inherit diff-hl-insert))
+  '((t :inherit shadow))
   "Face used to highlight lines inserted since reference rev."
   :group 'diff-hl)
 
 (defface diff-hl-reference-delete
-  '((default :inherit diff-hl-delete))
+  '((t :inherit shadow))
   "Face used to highlight lines deleted since reference rev."
   :group 'diff-hl)
 
 (defface diff-hl-reference-change
-  '((default :inherit diff-hl-change))
+  '((t :inherit shadow))
   "Face used to highlight lines changed since reference rev."
   :group 'diff-hl)
 
@@ -112,11 +107,6 @@
   "The prefix for all `diff-hl' commands."
   :group 'diff-hl
   :type 'string)
-
-(defcustom diff-hl-draw-borders t
-  "Non-nil to draw borders around fringe indicators."
-  :group 'diff-hl
-  :type 'boolean)
 
 (defcustom diff-hl-disable-on-remote nil
   "Non-nil will disable `diff-hl' in remote buffers."
@@ -133,61 +123,31 @@
   :group 'diff-hl
   :type 'boolean)
 
-(defcustom diff-hl-fallback-to-margin t
-  "Non-nil to use margin instead of fringe on non-graphic displays.
-
-This resizes the margin to 1 if it's not visible."
+(defcustom diff-hl-highlight-reference t
+  "Non-nil to mark changes against the reference revision separately.
+Those changes use the same symbols as uncommitted ones, but are shown
+with `diff-hl-reference-insert' and the related faces (dimmed by
+default).  When nil, all changes against the reference revision are
+shown as if they were uncommitted."
   :group 'diff-hl
   :type 'boolean)
 
-(defcustom diff-hl-autohide-margin nil
-  "Non-nil to reset margin width to 0 when no indicators shown.
+(defvar diff-hl--margin-spec-cache (make-hash-table :test 'equal))
 
-When you use it, it's recommended to verify first that other enabled
-features don't use margin for their indicators."
-  :type 'boolean)
-
-(defcustom diff-hl-highlight-function 'diff-hl-highlight-on-fringe
-  "Function to highlight the current line. Its arguments are
-  overlay, change type and position within a hunk."
+(defcustom diff-hl-margin-symbols-alist
+  '((insert . "+") (delete . "-") (change . "~")
+    (unknown . "?") (ignored . "i"))
+  "Alist from change types to the strings shown in the margin."
   :group 'diff-hl
-  :type 'function)
+  :type '(alist :key-type symbol
+                :value-type string
+                :options (insert delete change unknown ignored))
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (clrhash diff-hl--margin-spec-cache)))
 
-(defcustom diff-hl-highlight-reference-function 'diff-hl-highlight-on-fringe-flat
-  "Function to highlight the changes against the reference revision.
-Its arguments are overlay, change type and position within a hunk."
-  :group 'diff-hl
-  :type 'function)
-
-(defcustom diff-hl-fringe-flat-bmp 'diff-hl-bmp-empty
-  "The bitmap symbol to use in `diff-hl-highlight-on-fringe-flat'.
-Some options are `diff-hl-bmp-empty', `diff-hl-bmp-i', or any of the
-built-in bitmaps."
-  :group 'diff-hl
-  :type 'symbol)
-
-(defcustom diff-hl-fringe-bmp-function 'diff-hl-fringe-bmp-from-pos
-  "Function to choose the fringe bitmap for a given change type
-  and position within a hunk.  Should accept two arguments."
-  :group 'diff-hl
-  :type '(choice (const diff-hl-fringe-bmp-from-pos)
-                 (const diff-hl-fringe-bmp-from-type)
-                 function))
-
-(defcustom diff-hl-fringe-face-function 'diff-hl-fringe-face-from-type
-  "Function to choose the fringe face for a given change type
-  and position within a hunk.  Should accept two arguments."
-  :group 'diff-hl
-  :type 'function)
-
-(defcustom diff-hl-fringe-reference-face-function 'diff-hl-fringe-reference-face-from-type
-  "Function to choose the fringe face for a given change type
-and position within a \"diff to reference\" hunk."
-  :group 'diff-hl
-  :type 'function)
-
-(defcustom diff-hl-side 'left
-  "Which side to use for indicators."
+(defcustom diff-hl-side 'right
+  "Which margin to use for indicators."
   :type '(choice (const left)
                  (const right))
   :initialize 'custom-initialize-default
@@ -196,12 +156,6 @@ and position within a \"diff to reference\" hunk."
            (when on (global-diff-hl-mode -1))
            (set-default var value)
            (when on (global-diff-hl-mode 1)))))
-
-(defcustom diff-hl-bmp-max-width 16
-  "Maximum width of the fringe indicator bitmaps, in pixels.
-The bitmap width is decided by comparing this value with the current width
-of the fringe.  When the fringe is hidden, this value is also used."
-  :type 'integer)
 
 (defcustom diff-hl-highlight-revert-hunk-function
   #'diff-hl-revert-narrow-to-hunk
@@ -237,8 +191,8 @@ performance when viewing such files in certain conditions."
 (defcustom diff-hl-show-staged-changes t
   "Whether to include staged changes in the indicators.
 
-When `diff-hl-highlight-reference-function' is non-nil, instead of being
-hidden, the staged changes become part of the \"reference\" indicators."
+When `diff-hl-highlight-reference' is non-nil, instead of being hidden,
+the staged changes become part of the \"reference\" indicators."
   :type 'boolean)
 
 (defcustom diff-hl-goto-hunk-old-revisions nil
@@ -307,92 +261,41 @@ It can be a relative expression as well, such as \"HEAD^\".")
 BUFFER defaults to the current buffer."
   (buffer-file-name (diff-hl--target-buffer buffer)))
 
-(defun diff-hl-define-bitmaps ()
-  (let* ((scale (if (and (boundp 'text-scale-mode-amount)
-                         (numberp text-scale-mode-amount))
-                    (expt text-scale-mode-step text-scale-mode-amount)
-                  1))
-         (spacing (or (and (display-graphic-p) (default-value 'line-spacing)) 0))
-         (total-spacing (pcase spacing
-                          ((pred numberp) spacing)
-                          (`(,above . ,below) (+ above below))))
-         (h (+ (ceiling (* (frame-char-height) scale))
-               (if (floatp total-spacing)
-                   (truncate (* (frame-char-height) total-spacing))
-                 total-spacing)))
-         (w (min (frame-parameter nil (intern (format "%s-fringe" diff-hl-side)))
-                 diff-hl-bmp-max-width))
-         (_ (when (zerop w) (setq w diff-hl-bmp-max-width)))
-         (middle (make-vector h (expt 2 (1- w))))
-         (ones (1- (expt 2 w)))
-         (top (copy-sequence middle))
-         (bottom (copy-sequence middle))
-         (single (copy-sequence middle)))
-    (aset top 0 ones)
-    (aset bottom (1- h) ones)
-    (aset single 0 ones)
-    (aset single (1- h) ones)
-    (define-fringe-bitmap 'diff-hl-bmp-top top h w 'top)
-    (define-fringe-bitmap 'diff-hl-bmp-middle middle h w 'center)
-    (define-fringe-bitmap 'diff-hl-bmp-bottom bottom h w 'bottom)
-    (define-fringe-bitmap 'diff-hl-bmp-single single h w 'top)
-    (define-fringe-bitmap 'diff-hl-bmp-i [3 3 0 3 3 3 3 3 3 3] nil 2 'center)
-    (let* ((w2 (* (/ w 2) 2))
-           ;; When fringes are disabled, it's easier to fix up the width,
-           ;; instead of doing nothing (#20).
-           (w2 (if (zerop w2) 2 w2))
-           (delete-row (- (expt 2 (1- w2)) 2))
-           (middle-pos (1- (/ w2 2)))
-           (middle-bit (expt 2 middle-pos))
-           (insert-bmp (make-vector w2 (* 3 middle-bit))))
-      (define-fringe-bitmap 'diff-hl-bmp-delete (make-vector 2 delete-row) w2 w2)
-      (aset insert-bmp 0 0)
-      (aset insert-bmp middle-pos delete-row)
-      (aset insert-bmp (1+ middle-pos) delete-row)
-      (aset insert-bmp (1- w2) 0)
-      (define-fringe-bitmap 'diff-hl-bmp-insert insert-bmp w2 w2)
-      )))
+(defvar-local diff-hl--margin-widened nil
+  "The margin width variable diff-hl set to 1 in the current buffer, if any.")
 
-(defun diff-hl-maybe-define-bitmaps ()
-  (when (window-system) ;; No fringes in the console.
-    (unless (fringe-bitmap-p 'diff-hl-bmp-empty)
-      (diff-hl-define-bitmaps)
-      (define-fringe-bitmap 'diff-hl-bmp-empty [0] 1 1 'center))))
+(defun diff-hl--refresh-margins ()
+  (dolist (win (get-buffer-window-list nil nil t))
+    (set-window-buffer win (current-buffer))))
 
-(defun diff-hl-maybe-redefine-bitmaps ()
-  (when (window-system)
-    (diff-hl-define-bitmaps)))
+(defun diff-hl--ensure-margin ()
+  "Make the margin on `diff-hl-side' at least one column wide."
+  (let ((var (intern (format "%s-margin-width" diff-hl-side))))
+    (when (zerop (symbol-value var))
+      (set var 1)
+      (setq diff-hl--margin-widened var)
+      (diff-hl--refresh-margins))))
 
-(defvar diff-hl-spec-cache (make-hash-table :test 'equal))
+(defun diff-hl--restore-margin ()
+  "Undo `diff-hl--ensure-margin'."
+  (when diff-hl--margin-widened
+    (set diff-hl--margin-widened 0)
+    (setq diff-hl--margin-widened nil)
+    (diff-hl--refresh-margins)))
 
-(defun diff-hl-fringe-spec (type pos side)
-  (let* ((key (list type pos side
-                    diff-hl-fringe-face-function
-                    diff-hl-fringe-bmp-function))
-         (val (gethash key diff-hl-spec-cache)))
-    (unless val
-      (let* ((face-sym (funcall diff-hl-fringe-face-function type pos))
-             (bmp-sym (funcall diff-hl-fringe-bmp-function type pos)))
-        (setq val (propertize " " 'display `((,(intern (format "%s-fringe" side))
-                                              ,bmp-sym ,face-sym))))
-        (puthash key val diff-hl-spec-cache)))
-    val))
-
-(defun diff-hl-fringe-face-from-type (type _pos)
-  (intern (format "diff-hl-%s" type)))
-
-(defun diff-hl-fringe-reference-face-from-type (type _pos)
-  (intern (format "diff-hl-reference-%s" type)))
-
-(defun diff-hl-fringe-bmp-from-pos (_type pos)
-  (intern (format "diff-hl-bmp-%s" pos)))
-
-(defun diff-hl-fringe-bmp-from-type (type _pos)
-  (cl-case type
-    (unknown 'question-mark)
-    (change 'exclamation-mark)
-    (ignored 'diff-hl-bmp-i)
-    (t (intern (format "diff-hl-bmp-%s" type)))))
+(defun diff-hl--margin-spec (type face)
+  "Return the margin display string for change TYPE shown with FACE."
+  (let ((key (list type face diff-hl-side)))
+    (or (gethash key diff-hl--margin-spec-cache)
+        (puthash
+         key
+         (propertize
+          " " 'display
+          `((margin ,(intern (format "%s-margin" diff-hl-side)))
+            ,(propertize (or (assoc-default type diff-hl-margin-symbols-alist)
+                             " ")
+                         'face face)))
+         diff-hl--margin-spec-cache))))
 
 (defmacro diff-hl-with-diff-switches (body)
   `(progn
@@ -499,7 +402,7 @@ BUFFER defaults to the current buffer."
                                       (eq diff-hl-update-async t))))
         (cond
          ((and
-           (not diff-hl-highlight-reference-function)
+           (not diff-hl-highlight-reference)
            (diff-hl-modified-p state))
           `((:working . ,(diff-hl-changes-buffer file))))
          ((or
@@ -644,9 +547,10 @@ contents as they are (or would be) after applying the changes in NEW."
      (message "An error occurred in diff-hl--update: %S" err)
      nil)))
 
-(defun diff-hl--update-overlays (changes reuse)
+(defun diff-hl--update-overlays (changes reuse &optional reference)
   "Updates the diff-hl overlays based on CHANGES.
 REUSE is a list of existing line overlays that can be used.
+REFERENCE non-nil means CHANGES are against the reference revision.
 Return a list of line overlays used."
   (let ((current-line 1)
         ovls)
@@ -667,12 +571,10 @@ Return a list of line overlays used."
                 (push
                  (diff-hl-add-highlighting
                   type
-                  (cond
-                   ((not diff-hl-draw-borders) 'empty)
-                   ((and (= len 1) (= line current-line)) 'single)
-                   ((= len 1) 'bottom)
-                   ((= line current-line) 'top)
-                   (t 'middle))
+                  (intern (format (if reference
+                                      "diff-hl-reference-%s"
+                                    "diff-hl-%s")
+                                  type))
                   (and reuse
                        (= (overlay-start (car reuse)) (point))
                        (pop reuse)))
@@ -718,15 +620,9 @@ Return a list of line overlays used."
                     (diff-hl-remove-overlays)
                     (let (reuse)
                       (when ref-changes
-                        (let ((diff-hl-highlight-function
-                               diff-hl-highlight-reference-function)
-                              (diff-hl-fringe-face-function
-                               diff-hl-fringe-reference-face-function))
-                          (setq reuse (diff-hl--update-overlays ref-changes nil))))
+                        (setq reuse (diff-hl--update-overlays ref-changes nil t)))
                       (when changes
-                        (diff-hl--update-overlays changes reuse)))
-                    (unless (or changes ref-changes)
-                      (diff-hl--autohide-margin)))))))))))))
+                        (diff-hl--update-overlays changes reuse))))))))))))))
 
 (defun diff-hl--resolve (value-or-buffer cb)
   (if (listp value-or-buffer)
@@ -764,16 +660,6 @@ Return a list of line overlays used."
      ;; Maybe we should ignore all other states as well.
      (t (error "Unexpected process state")))))
 
-(defun diff-hl--autohide-margin ()
-  (let ((width-var (intern (format "%s-margin-width" diff-hl-side))))
-    (when (and diff-hl-autohide-margin
-               (> (symbol-value width-var) 0))
-      (if (eql (default-value width-var) 0)
-          (kill-local-variable width-var)
-        (set width-var 0))
-      (dolist (win (get-buffer-window-list))
-        (set-window-buffer win (current-buffer))))))
-
 (defun diff-hl-update-once ()
   ;; Ensure that the update happens once, after all major mode changes.
   ;; That will keep the the local value of <side>-margin-width, if any.
@@ -781,24 +667,14 @@ Return a list of line overlays used."
     (setq diff-hl-timer
           (run-with-idle-timer 0 nil #'diff-hl--update-buffer (current-buffer)))))
 
-(defun diff-hl-add-highlighting (type shape &optional ovl)
+(defun diff-hl-add-highlighting (type face &optional ovl)
+  "Mark the current line in the margin as a change of TYPE, using FACE.
+OVL is an existing overlay to reuse."
   (let ((o (or ovl (make-overlay (point) (point)))))
+    (diff-hl--ensure-margin)
     (overlay-put o 'diff-hl t)
-    (funcall diff-hl-highlight-function o type shape)
+    (overlay-put o 'before-string (diff-hl--margin-spec type face))
     o))
-
-(autoload 'diff-hl-highlight-on-margin "diff-hl-margin")
-
-(defun diff-hl-highlight-on-fringe (ovl type shape)
-  (if (and diff-hl-fallback-to-margin
-           (not (display-graphic-p)))
-      (diff-hl-highlight-on-margin ovl type shape)
-    (overlay-put ovl 'before-string (diff-hl-fringe-spec type shape
-                                                         diff-hl-side))))
-
-(defun diff-hl-highlight-on-fringe-flat (ovl type _shape)
-  (let ((diff-hl-fringe-bmp-function (lambda (&rest _s) diff-hl-fringe-flat-bmp)))
-    (diff-hl-highlight-on-fringe ovl type nil)))
 
 (defun diff-hl-remove-overlays (&optional beg end)
   (save-restriction
@@ -903,7 +779,7 @@ buffer will show the position corresponding to its current line."
   (let* ((reference diff-hl-reference-revision)
          ;; Use the index snapshot only when diff-hl hides staged changes.
          (use-index (and (diff-hl--use-git-index-base-p)
-                         (not diff-hl-highlight-reference-function)))
+                         (not diff-hl-highlight-reference)))
          (buf
           (if use-index
               (let ((obj (diff-hl-git-index-object-name file)))
@@ -1354,7 +1230,7 @@ The value of this variable is a mode line template as in
             (,diff-hl-command-prefix . diff-hl-command-map))
   (if diff-hl-mode
       (progn
-        (diff-hl-maybe-define-bitmaps)
+        (diff-hl--ensure-margin)
         (add-hook 'after-save-hook 'diff-hl-update nil t)
         (add-hook 'after-change-functions 'diff-hl-edit nil t)
         (add-hook (if vc-mode
@@ -1370,7 +1246,6 @@ The value of this variable is a mode line template as in
         ;; Never removed because it acts globally.
         (add-hook 'vc-checkin-hook 'diff-hl-after-checkin)
         (add-hook 'after-revert-hook 'diff-hl-update-once nil t)
-        (add-hook 'text-scale-mode-hook 'diff-hl-maybe-redefine-bitmaps nil t)
         (when-let* ((rev (cdr
                           (cl-find-if
                            (lambda (pair) (string-prefix-p (car pair) default-directory))
@@ -1380,9 +1255,8 @@ The value of this variable is a mode line template as in
     (remove-hook 'after-change-functions 'diff-hl-edit t)
     (remove-hook 'find-file-hook 'diff-hl-update-once t)
     (remove-hook 'after-revert-hook 'diff-hl-update-once t)
-    (remove-hook 'text-scale-mode-hook 'diff-hl-maybe-redefine-bitmaps t)
     (diff-hl-remove-overlays)
-    (diff-hl--autohide-margin)
+    (diff-hl--restore-margin)
     (kill-local-variable 'diff-hl-reference-revision)))
 
 (defun diff-hl-after-checkin ()
