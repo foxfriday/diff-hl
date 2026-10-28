@@ -628,6 +628,7 @@ Return a list of line overlays used."
                 (overlay-put h 'diff-hl t)
                 (overlay-put h 'diff-hl-hunk t)
                 (overlay-put h 'diff-hl-hunk-type type)
+                (overlay-put h 'diff-hl-reference reference)
                 (overlay-put h 'modification-hooks hook)
                 (overlay-put h 'insert-in-front-hooks hook)
                 (overlay-put h 'insert-behind-hooks hook)))))))
@@ -1070,10 +1071,16 @@ its end position."
     (diff-hl-revert-hunk-1)))
 
 (defun diff-hl-hunk-overlay-at (pos)
-  "Return the diff-hl hunk overlay at POS, if any."
-  (cl-loop for o in (overlays-in pos (1+ pos))
-           when (overlay-get o 'diff-hl-hunk)
-           return o))
+  "Return the diff-hl hunk overlay at POS, if any.
+When the indicators diff against the Git index, staged hunks are only
+shown, so they are skipped: navigating, staging or reverting them would
+act on the unstaged changes instead."
+  (let ((skip-staged (diff-hl--use-git-index-base-p)))
+    (cl-loop for o in (overlays-in pos (1+ pos))
+             when (and (overlay-get o 'diff-hl-hunk)
+                       (not (and skip-staged
+                                 (overlay-get o 'diff-hl-reference))))
+             return o)))
 
 (defun diff-hl-search-next-hunk (&optional backward)
   "Search the next hunk in the current buffer, or previous if BACKWARD."

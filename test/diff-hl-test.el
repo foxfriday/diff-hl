@@ -373,6 +373,31 @@ Diff finished."
     (should (equal (diff-hl--project-reference "~/outer/sub/") "outer-rev"))
     (should-not (diff-hl--project-reference "~/elsewhere/"))))
 
+(ert-deftest diff-hl-staged-hunks-are-skipped ()
+  (diff-hl-test-with-repo
+    (diff-hl-test-commit "f.txt" "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")
+    (diff-hl-test-write "f.txt" "one\n2\n3\n4\n5\n6\n7\n8\n9\nten\n")
+    (with-current-buffer (find-file-noselect (expand-file-name "f.txt"))
+      (let ((diff-hl-show-staged-changes nil)
+            (diff-hl-update-async nil))
+        (diff-hl-mode 1)
+        (diff-hl-update)
+        (goto-char (point-min))
+        (diff-hl-stage-current-hunk)
+        (diff-hl-update)
+        ;; Line 1 is staged: still drawn, but no longer a hunk to act on.
+        (goto-char (point-min))
+        (should (cl-some (lambda (o) (overlay-get o 'diff-hl-reference))
+                         (overlays-in (point) (1+ (point)))))
+        (should-not (diff-hl-hunk-overlay-at (point)))
+        (diff-hl-next-hunk)
+        (should (= (line-number-at-pos) 10))
+        (should-error (diff-hl-next-hunk) :type 'user-error)
+        (should-error (diff-hl-previous-hunk) :type 'user-error)
+        ;; Against a reference revision, those hunks are what gets reviewed.
+        (let ((diff-hl-reference-revision "HEAD"))
+          (should (diff-hl-hunk-overlay-at (point-min))))))))
+
 (provide 'diff-hl-test)
 
 ;;; diff-hl-test.el ends here
