@@ -398,6 +398,25 @@ Diff finished."
         (let ((diff-hl-reference-revision "HEAD"))
           (should (diff-hl-hunk-overlay-at (point-min))))))))
 
+(ert-deftest diff-hl-ediff-compares-against-index ()
+  (diff-hl-test-with-repo
+    (diff-hl-test-commit "f.txt" "committed\n")
+    (diff-hl-test-write "f.txt" "staged\n")
+    (diff-hl-test-git "add" "f.txt")
+    (diff-hl-test-write "f.txt" "working\n")
+    (let ((file (expand-file-name "f.txt"))
+          (diff-hl-reference-revision nil))
+      ;; Ediff is started from the file's buffer.
+      (find-file-noselect file)
+      (let ((diff-hl-show-staged-changes nil))
+        (with-current-buffer (diff-hl--ediff-reference-buffer file)
+          (should (equal (buffer-string) "staged\n"))
+          (kill-buffer)))
+      (let ((diff-hl-show-staged-changes t))
+        (with-current-buffer (diff-hl--ediff-reference-buffer file)
+          (should (equal (buffer-string) "committed\n"))
+          (kill-buffer))))))
+
 (provide 'diff-hl-test)
 
 ;;; diff-hl-test.el ends here

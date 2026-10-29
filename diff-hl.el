@@ -135,13 +135,12 @@ shown as if they were uncommitted."
 (defvar diff-hl--margin-spec-cache (make-hash-table :test 'equal))
 
 (defcustom diff-hl-margin-symbols-alist
-  '((insert . "+") (delete . "-") (change . "~")
-    (unknown . "?") (ignored . "i"))
+  '((insert . "+") (delete . "-") (change . "~"))
   "Alist from change types to the strings shown in the margin."
   :group 'diff-hl
   :type '(alist :key-type symbol
                 :value-type string
-                :options (insert delete change unknown ignored))
+                :options (insert delete change))
   :set (lambda (symbol value)
          (set-default symbol value)
          (clrhash diff-hl--margin-spec-cache)))
@@ -847,9 +846,9 @@ buffer will show the position corresponding to its current line."
   (unless (eq (vc-backend file) 'Git)
     (user-error "The buffer is not under Git control"))
   (let* ((reference diff-hl-reference-revision)
-         ;; Use the index snapshot only when diff-hl hides staged changes.
-         (use-index (and (diff-hl--use-git-index-base-p)
-                         (not diff-hl-highlight-reference)))
+         ;; Compare against what the indicators mark as changed: with staged
+         ;; changes hidden, that is the index.
+         (use-index (diff-hl--use-git-index-base-p))
          (buf
           (if use-index
               (let ((obj (diff-hl-git-index-object-name file)))
@@ -877,6 +876,12 @@ buffer will show the position corresponding to its current line."
          (startup
           (list
            (lambda ()
+             ;; The reference buffer only exists for this session.
+             (add-hook 'ediff-cleanup-hook
+                       (lambda ()
+                         (when (buffer-live-p refbuf)
+                           (kill-buffer refbuf)))
+                       nil t)
              (unless (zerop ediff-number-of-differences)
                (ediff-jump-to-difference
                 (max 1 (ediff-diff-at-point 'B pos))))))))
